@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pdf-to-doc"
+version = "1.0.0"
+description = "Batch convert PDF files to Microsoft Word .docx documents."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "PDF-to-DOC" }]
+dependencies = [
+    "PyMuPDF>=1.24.0",
+    "python-docx>=1.1.0",
+    "requests>=2.31.0",
+    "beautifulsoup4>=4.12.0",
+]
+
+[project.scripts]
+pdf-to-doc = "pdf_to_doc.cli:main"
+docx-hf-replace = "pdf_to_doc.hf_cli:main"
+pdf-download = "pdf_to_doc.dl_cli:main"
+
+[tool.setuptools.packages.find]
+include = ["pdf_to_doc*"]

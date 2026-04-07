@@ -1,0 +1,8 @@
+pdf2docx>=0.5.8
+PyMuPDF>=1.24.0
+python-docx>=1.1.0
+requests>=2.31.0
+beautifulsoup4>=4.12.0
+playwright>=1.40.0
+# Optional (Windows-only, used by the "word" engine for best editable output):
+pywin32>=306; sys_platform == "win32"
