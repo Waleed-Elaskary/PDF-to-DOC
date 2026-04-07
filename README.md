@@ -168,11 +168,11 @@ Scrape a web page for PDF hyperlinks, create a named subfolder per link, and dow
 # Download all PDFs linked on a page (uses browser rendering by default)
 python -m pdf_to_doc.dl_cli "https://example.com/downloads" /path/to/output
 
+# Overwrite existing PDFs (log history is preserved)
+python -m pdf_to_doc.dl_cli "https://example.com/downloads" /path/to/output --overwrite
+
 # Use plain HTTP (faster, for simple static HTML pages without JavaScript)
 python -m pdf_to_doc.dl_cli "https://example.com/downloads" /path/to/output --no-browser
-
-# Re-download files that already exist
-python -m pdf_to_doc.dl_cli "https://example.com/downloads" /path/to/output --redownload
 
 # Verbose logging
 python -m pdf_to_doc.dl_cli "https://example.com/downloads" /path/to/output -v
@@ -182,8 +182,8 @@ python -m pdf_to_doc.dl_cli "https://example.com/downloads" /path/to/output -v
 
 | Flag | Description |
 |------|-------------|
+| `--overwrite` | Re-download and overwrite existing PDFs. The download log is appended to (not replaced) so history is preserved |
 | `--no-browser` | Skip browser rendering; use plain HTTP (only for static HTML pages) |
-| `--redownload` | Re-download PDFs even if they already exist locally |
 | `-v`, `--verbose` | Debug logging |
 
 ### Behavior
@@ -198,17 +198,54 @@ The tool creates:
 ```
 output-folder/
 ├── Annual Report/
-│   └── Annual Report.pdf
+│   ├── Annual Report.pdf
+│   └── download_log.json
 └── Budget Summary/
-    └── Budget Summary.pdf
+    ├── Budget Summary.pdf
+    └── download_log.json
 ```
 
 - **Folder name** = sanitized link text from the `<a>` tag.
 - **PDF filename** = same as the folder name (with `.pdf` extension).
 - By default, uses a headless Chromium browser (Playwright) to handle JavaScript-rendered pages (Wix, React, Angular, etc.).
 - Use `--no-browser` for faster downloads on simple static HTML pages.
-- Skips already-downloaded files by default.
+- Skips already-downloaded files by default; use `--overwrite` to re-download.
 - Deduplicates links found on the page.
+- Invisible Unicode characters (zero-width spaces, etc.) are stripped from link text.
+
+### Download Log
+
+Each subfolder contains a `download_log.json` with metadata for every download. On re-downloads with `--overwrite`, new entries are **appended** (not replaced), preserving full history:
+
+```json
+[
+  {
+    "source_page": "https://example.com/downloads",
+    "download_url": "https://example.com/files/report.pdf",
+    "original_filename": "report.pdf",
+    "saved_filename": "Annual Report.pdf",
+    "saved_path": "/path/to/output/Annual Report/Annual Report.pdf",
+    "folder_name": "Annual Report",
+    "file_size_bytes": 245760,
+    "file_size_mb": 0.234,
+    "content_type": "application/pdf",
+    "server": "nginx",
+    "download_started_utc": "2026-04-07T14:32:01.123456+00:00",
+    "download_completed_utc": "2026-04-07T14:32:03.456789+00:00",
+    "download_duration_seconds": 2.33
+  },
+  {
+    "_note": "--- Re-downloaded (entry #2) ---",
+    "source_page": "https://example.com/downloads",
+    "download_url": "https://example.com/files/report.pdf",
+    "saved_filename": "Annual Report.pdf",
+    "download_completed_utc": "2026-04-08T09:15:22.789012+00:00",
+    "..."
+  }
+]
+```
+
+**Logged fields:** source page URL, direct download URL, original filename (from URL), saved filename, full path, folder name, file size (bytes and MB), content type, server, download start/end timestamps (UTC), and download duration.
 
 ---
 
