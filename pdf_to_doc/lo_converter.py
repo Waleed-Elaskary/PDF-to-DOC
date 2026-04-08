@@ -3,6 +3,10 @@ LibreOffice in headless mode.
 
 LibreOffice must be installed. The tool auto-detects common install paths or
 accepts an explicit --soffice flag.
+
+IMPORTANT: If another LibreOffice window (or background process) is running,
+headless conversion silently fails and produces nothing. This module works
+around that by giving the headless instance its own user profile directory.
 """
 from __future__ import annotations
 
@@ -50,7 +54,6 @@ def find_soffice(explicit: str | None = None) -> str:
     if env and Path(env).is_file():
         return env
 
-    # Check PATH
     on_path = shutil.which("soffice") or shutil.which("libreoffice")
     if on_path:
         return on_path
@@ -65,23 +68,40 @@ def find_soffice(explicit: str | None = None) -> str:
 
 
 def resolve_output_path(
-    pdf_path: Path, fmt: str, *, overwrite: bool
+    pdf_path: Path, fmt: str, *, overwrite: bool, prefix: str = "",
 ) -> Path:
     """Return the output path for a given PDF and format.
+
+    If prefix is set, prepend it to the stem (e.g. prefix="EBB-" turns
+    "report.pdf" into "EBB-report.odg").
 
     If the target exists and overwrite is False, append " (1)", " (2)", ... to
     the stem until a free name is found.
     """
-    base = pdf_path.with_suffix(f".{fmt}")
+    new_stem = f"{prefix}{pdf_path.stem}"
+    base = pdf_path.with_name(f"{new_stem}.{fmt}")
     if overwrite or not base.exists():
         return base
 
     counter = 1
     while True:
-        candidate = base.with_name(f"{base.stem} ({counter}).{fmt}")
+        candidate = base.with_name(f"{new_stem} ({counter}).{fmt}")
         if not candidate.exists():
             return candidate
         counter += 1
+
+
+# Persistent profile dir for headless LibreOffice (avoids conflict with any
+# running GUI instance).
+_LO_PROFILE_DIR: Path | None = None
+
+
+def _get_lo_profile() -> Path:
+    """Return a persistent temp directory for the headless LO user profile."""
+    global _LO_PROFILE_DIR
+    if _LO_PROFILE_DIR is None or not _LO_PROFILE_DIR.exists():
+        _LO_PROFILE_DIR = Path(tempfile.mkdtemp(prefix="lo_profile_"))
+    return _LO_PROFILE_DIR
 
 
 def _run_libreoffice(
@@ -94,48 +114,93 @@ def _run_libreoffice(
 ) -> Path:
     """Run LibreOffice headless to convert a PDF to the given format.
 
+    Uses an isolated user profile so conversions work even if LibreOffice
+    is already open.
+
     Returns the path of the file LibreOffice produced.
     """
-    # LibreOffice filter hints for PDF import
-    if fmt == FORMAT_ODG:
-        convert_arg = "odg:draw_pdf_import"
-    elif fmt == FORMAT_ODT:
-        convert_arg = "odt:writer_pdf_import"
-    else:
-        convert_arg = fmt
+    profile = _get_lo_profile()
+    # file:/// URI with forward slashes (required by LibreOffice on all platforms).
+    profile_uri = profile.resolve().as_uri()
 
-    cmd = [
+    # Build the command depending on target format.
+    #
+    #   ODG: LibreOffice Draw opens PDFs natively.
+    #        Export filter: "draw8" (or just "odg").
+    #
+    #   ODT: We must force Writer to import the PDF (not Draw) using
+    #        --infilter="writer_pdf_import", then export with "writer8".
+    #
+    base_cmd = [
         soffice,
         "--headless",
         "--norestore",
-        "--convert-to", convert_arg,
-        "--outdir", str(outdir),
-        str(pdf_path),
+        "--nolockcheck",
+        f"-env:UserInstallation={profile_uri}",
     ]
 
-    logger.debug("Running: %s", " ".join(cmd))
-    result = subprocess.run(
-        cmd,
-        capture_output=True,
-        text=True,
-        timeout=timeout,
+    if fmt == FORMAT_ODT:
+        attempts = [
+            # Attempt 1: force Writer import + writer8 export
+            [*base_cmd,
+             "--infilter=writer_pdf_import",
+             "--convert-to", "odt:writer8",
+             "--outdir", str(outdir),
+             str(pdf_path)],
+            # Attempt 2: just odt (some LO versions pick Writer automatically)
+            [*base_cmd,
+             "--infilter=writer_pdf_import",
+             "--convert-to", "odt",
+             "--outdir", str(outdir),
+             str(pdf_path)],
+        ]
+    else:  # ODG
+        attempts = [
+            [*base_cmd,
+             "--convert-to", "odg",
+             "--outdir", str(outdir),
+             str(pdf_path)],
+            [*base_cmd,
+             "--convert-to", "odg:draw8",
+             "--outdir", str(outdir),
+             str(pdf_path)],
+        ]
+
+    result = None
+    for cmd in attempts:
+        logger.debug("Running: %s", " ".join(cmd))
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+
+        logger.debug("stdout: %s", result.stdout.strip())
+        logger.debug("stderr: %s", result.stderr.strip())
+
+        # Check if the file was produced.
+        expected = outdir / pdf_path.with_suffix(f".{fmt}").name
+        if expected.exists():
+            return expected
+
+        candidates = list(outdir.glob(f"*.{fmt}"))
+        if candidates:
+            logger.debug("Found output via scan: %s", candidates[0].name)
+            return candidates[0]
+
+        logger.debug("Attempt did not produce output, trying next...")
+
+    # Nothing worked.
+    stdout = result.stdout.strip() if result else ""
+    stderr = result.stderr.strip() if result else ""
+    raise FileNotFoundError(
+        f"LibreOffice did not produce an output file.\n"
+        f"Input: {pdf_path}\n"
+        f"stdout: {stdout}\n"
+        f"stderr: {stderr}\n"
+        f"Tip: close any running LibreOffice windows and retry."
     )
-
-    if result.returncode != 0:
-        logger.debug("stdout: %s", result.stdout)
-        logger.debug("stderr: %s", result.stderr)
-        raise RuntimeError(
-            f"LibreOffice exited with code {result.returncode}: "
-            f"{result.stderr.strip() or result.stdout.strip()}"
-        )
-
-    # LibreOffice writes <stem>.<fmt> into outdir.
-    expected = outdir / pdf_path.with_suffix(f".{fmt}").name
-    if not expected.exists():
-        raise FileNotFoundError(
-            f"LibreOffice did not produce expected file: {expected}"
-        )
-    return expected
 
 
 def convert_pdf(
@@ -144,6 +209,7 @@ def convert_pdf(
     *,
     soffice: str,
     overwrite: bool = False,
+    prefix: str = "",
     timeout: int = 300,
 ) -> Path:
     """Convert a single PDF to .odg or .odt via LibreOffice.
@@ -157,22 +223,32 @@ def convert_pdf(
     if fmt not in VALID_FORMATS:
         raise ValueError(f"format must be one of {VALID_FORMATS}, got {fmt!r}")
 
-    output_path = resolve_output_path(pdf_path, fmt, overwrite=overwrite)
+    output_path = resolve_output_path(
+        pdf_path, fmt, overwrite=overwrite, prefix=prefix,
+    )
     logger.info(
         "Converting %s -> %s (format=%s)",
         pdf_path.name, output_path.name, fmt,
     )
 
-    # LibreOffice always writes to outdir with the original stem, so use a temp
-    # dir then move to the final name (handles collision renames).
-    with tempfile.TemporaryDirectory() as tmp:
-        tmp_path = Path(tmp)
+    # Use a temp dir next to the PDF (avoids cross-drive / permission issues).
+    parent_dir = pdf_path.parent
+    try:
+        tmp_ctx = tempfile.TemporaryDirectory(dir=parent_dir, prefix=".lo_tmp_")
+        tmp_path = Path(tmp_ctx.name)
+    except OSError:
+        logger.debug("Could not create temp dir next to PDF, using system temp.")
+        tmp_ctx = tempfile.TemporaryDirectory(prefix="lo_tmp_")
+        tmp_path = Path(tmp_ctx.name)
+
+    try:
         produced = _run_libreoffice(
             soffice, pdf_path, fmt, tmp_path, timeout=timeout,
         )
-        # Move to final destination.
         output_path.parent.mkdir(parents=True, exist_ok=True)
         shutil.move(str(produced), str(output_path))
+    finally:
+        tmp_ctx.cleanup()
 
     logger.info("Wrote %s", output_path.name)
     return output_path

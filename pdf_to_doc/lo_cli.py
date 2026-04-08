@@ -50,6 +50,13 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Overwrite existing output files instead of creating 'name (1).odg'.",
     )
     p.add_argument(
+        "--prefix", default="",
+        help=(
+            "Prefix to prepend to output filenames. "
+            "E.g. --prefix 'EBB-' turns 'report.pdf' into 'EBB-report.odg'."
+        ),
+    )
+    p.add_argument(
         "--soffice", default=None,
         help=(
             "Explicit path to the soffice executable. If omitted, the tool "
@@ -105,6 +112,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.format,
                 soffice=soffice,
                 overwrite=args.overwrite,
+                prefix=args.prefix,
                 timeout=args.timeout,
             )
             succeeded += 1

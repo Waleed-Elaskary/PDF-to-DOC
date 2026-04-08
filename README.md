@@ -7,7 +7,7 @@ A collection of four command-line tools for working with PDF and Word documents:
 3. **docx-hf-replace** — Replace headers and footers across many `.docx` files using a template
 4. **pdf-download** — Scrape a web page for PDF links, create named folders, and download each file
 
-All tools are cross-platform Python CLI applications. The Word COM engine (best editable output for `.docx`) is available on Windows with Microsoft Word installed. LibreOffice conversions require [LibreOffice](https://www.libreoffice.org/download/) installed.
+All tools are cross-platform Python CLI applications. The Word COM engine (best editable `.docx` output) is available on Windows with Microsoft Word installed. LibreOffice conversions require [LibreOffice](https://www.libreoffice.org/download/) installed.
 
 ---
 
@@ -17,7 +17,7 @@ All tools are cross-platform Python CLI applications. The Word COM engine (best 
 
 ```bash
 # Clone the repository
-git clone https://github.com/Waleed-Elaskary/PDF-to-DOC.git
+git clone <repository-url>
 cd PDF-to-DOC
 
 # Create and activate a virtual environment
@@ -43,6 +43,10 @@ python -m playwright install chromium
 **Optional — for OCR of scanned PDFs:**
 
 Install [Tesseract OCR](https://github.com/UB-Mannheim/tesseract/wiki) and ensure it is on your PATH or in a standard install directory.
+
+**Optional — for LibreOffice conversions (.odg / .odt):**
+
+Install [LibreOffice](https://www.libreoffice.org/download/). The tool auto-detects common install locations, or you can specify the path with `--soffice`.
 
 ---
 
@@ -71,8 +75,11 @@ python -m pdf_to_doc /path/to/folder --overwrite
 # OCR scanned PDFs (requires Tesseract)
 python -m pdf_to_doc /path/to/folder --ocr
 
-# OCR with specific language
-python -m pdf_to_doc /path/to/folder --ocr --ocr-language eng+ara
+# OCR with specific language(s)
+python -m pdf_to_doc /path/to/folder --ocr --ocr-language eng+fra
+
+# Increase OCR resolution for better accuracy
+python -m pdf_to_doc /path/to/folder --ocr --ocr-dpi 400
 
 # Verbose logging
 python -m pdf_to_doc /path/to/folder -v
@@ -86,9 +93,9 @@ python -m pdf_to_doc /path/to/folder -v
 | `--engine {auto,word,pdf2docx,text}` | Conversion engine. `auto` picks `word` if available, else `pdf2docx` |
 | `--overwrite` | Overwrite existing `.docx` instead of creating `name (1).docx` |
 | `--ocr` | Run Tesseract OCR on pages with no text layer |
-| `--ocr-language LANG` | Tesseract language code (default: `eng`) |
-| `--ocr-dpi DPI` | Rendering DPI for OCR (default: `300`) |
-| `--tessdata PATH` | Path to tessdata directory |
+| `--ocr-language LANG` | Tesseract language code(s), e.g. `eng`, `eng+fra`, `eng+ara` (default: `eng`) |
+| `--ocr-dpi DPI` | Rendering DPI for OCR (default: `300`). Higher values improve accuracy for small text |
+| `--tessdata PATH` | Path to tessdata directory (auto-detected if omitted) |
 | `-v`, `--verbose` | Debug logging |
 
 ### Engines
@@ -96,8 +103,8 @@ python -m pdf_to_doc /path/to/folder -v
 | Engine | Platform | Output Quality | Notes |
 |--------|----------|---------------|-------|
 | `word` | Windows | Best — fully editable text, tables, images, styles | Requires Microsoft Word installed + `pywin32` |
-| `pdf2docx` | Any | Good — preserves layout, tables, images in floating frames | Pure Python |
-| `text` | Any | Basic — plain text with page breaks | Fastest, no formatting |
+| `pdf2docx` | Any | Good — preserves layout, tables, images in floating frames | Pure Python, no external software needed |
+| `text` | Any | Basic — plain text with page breaks | Fastest, no formatting preserved |
 
 ### Behavior
 
@@ -105,17 +112,18 @@ python -m pdf_to_doc /path/to/folder -v
 - If `name.docx` already exists and `--overwrite` is not set, creates `name (1).docx`, `name (2).docx`, etc.
 - Source PDFs are never modified.
 - If a single file fails, the tool logs the error and continues with the rest.
+- For scanned/image-based PDFs with no text layer, enable `--ocr` to extract text via Tesseract. The tool first creates a searchable PDF, then runs the conversion engine on it.
 - Exit codes: `0` = all succeeded, `1` = no PDFs found, `2` = some files failed.
 
 ---
 
 ## Tool 2: PDF to LibreOffice Formats (ODG / ODT)
 
-Batch convert PDF files to LibreOffice Draw (`.odg`) or LibreOffice Writer (`.odt`) using headless LibreOffice. One output file is written per input PDF, saved in the same folder using the same base filename.
+Batch convert PDF files to LibreOffice Draw (`.odg`) or LibreOffice Writer (`.odt`) using headless LibreOffice. One output file is written per input PDF, saved in the same folder using the same base filename. Optionally prepend a prefix to all output filenames.
 
 ### Prerequisites
 
-Install [LibreOffice](https://www.libreoffice.org/download/). The tool auto-detects common install locations, or you can specify the path explicitly.
+Install [LibreOffice](https://www.libreoffice.org/download/). The tool auto-detects common install locations on Windows, macOS, and Linux. You can also set the `SOFFICE_PATH` environment variable or pass `--soffice` explicitly.
 
 ### Usage
 
@@ -130,13 +138,19 @@ python -m pdf_to_doc.lo_cli /path/to/folder -f odt
 python -m pdf_to_doc.lo_cli /path/to/folder -r
 
 # Convert specific files
-python -m pdf_to_doc.lo_cli file1.pdf file2.pdf
+python -m pdf_to_doc.lo_cli file1.pdf file2.pdf -f odt
+
+# Add a prefix to output filenames
+python -m pdf_to_doc.lo_cli /path/to/folder --prefix "PROJ-"
 
 # Overwrite existing output files
 python -m pdf_to_doc.lo_cli /path/to/folder --overwrite
 
+# Combine: recursive + prefix + format + overwrite
+python -m pdf_to_doc.lo_cli /path/to/folder -r -f odt --prefix "PROJ-" --overwrite
+
 # Specify LibreOffice path explicitly
-python -m pdf_to_doc.lo_cli /path/to/folder --soffice "/usr/bin/soffice"
+python -m pdf_to_doc.lo_cli /path/to/folder --soffice "/path/to/soffice"
 
 # Custom timeout per file (default: 300 seconds)
 python -m pdf_to_doc.lo_cli /path/to/folder --timeout 600
@@ -149,9 +163,10 @@ python -m pdf_to_doc.lo_cli /path/to/folder -v
 
 | Flag | Description |
 |------|-------------|
-| `-f`, `--format {odg,odt}` | Output format: `odg` (Draw, default) or `odt` (Writer) |
+| `-f`, `--format {odg,odt}` | Output format: `odg` for LibreOffice Draw (default), `odt` for LibreOffice Writer |
 | `-r`, `--recursive` | Scan subfolders for PDFs |
 | `--overwrite` | Overwrite existing output files instead of creating `name (1).odg` |
+| `--prefix TEXT` | Prefix to prepend to output filenames (e.g. `--prefix "PROJ-"` turns `report.pdf` into `PROJ-report.odg`) |
 | `--soffice PATH` | Explicit path to the `soffice` executable |
 | `--timeout SECONDS` | Per-file conversion timeout (default: `300`) |
 | `-v`, `--verbose` | Debug logging |
@@ -166,11 +181,24 @@ python -m pdf_to_doc.lo_cli /path/to/folder -v
 ### Behavior
 
 - For each `name.pdf`, writes `name.odg` (or `name.odt`) in the same directory.
+- With `--prefix "PROJ-"`, output becomes `PROJ-name.odg`.
 - If the output file already exists and `--overwrite` is not set, creates `name (1).odg`, `name (2).odg`, etc.
 - Source PDFs are never modified.
 - If a single file fails, the tool logs the error and continues with the rest.
-- LibreOffice auto-detection checks: `--soffice` flag, `SOFFICE_PATH` environment variable, system PATH, and common install directories.
+- Uses an isolated user profile for headless LibreOffice, so conversions work even when LibreOffice is already open in the GUI.
+- For ODT conversion, the tool forces Writer to import the PDF (not Draw) and exports with the correct Writer filter.
+- For ODG conversion, Draw's native PDF import is used.
+- LibreOffice auto-detection order: `--soffice` flag > `SOFFICE_PATH` environment variable > system PATH > common install directories.
 - Exit codes: `0` = all succeeded, `1` = no PDFs found or LibreOffice not found, `2` = some files failed.
+
+### Troubleshooting
+
+| Issue | Solution |
+|-------|----------|
+| LibreOffice not found | Install LibreOffice, or pass `--soffice /path/to/soffice` |
+| Silent conversion failure | Close any open LibreOffice windows and retry |
+| Timeout on large files | Increase with `--timeout 600` (or higher) |
+| Permission errors | Ensure write access to the PDF's parent directory |
 
 ---
 
@@ -185,24 +213,24 @@ Replace the header and footer in every `.docx` file inside a folder (recursively
 python -m pdf_to_doc.hf_cli /path/to/template.docx /path/to/target/folder
 
 # Non-recursive (top folder only)
-python -m pdf_to_doc.hf_cli template.docx folder --no-recursive
+python -m pdf_to_doc.hf_cli /path/to/template.docx /path/to/folder --no-recursive
 
 # Skip creating .bak backup copies
-python -m pdf_to_doc.hf_cli template.docx folder --no-backup
+python -m pdf_to_doc.hf_cli /path/to/template.docx /path/to/folder --no-backup
 
 # Force pure-Python engine (no Word COM)
-python -m pdf_to_doc.hf_cli template.docx folder --engine python
+python -m pdf_to_doc.hf_cli /path/to/template.docx /path/to/folder --engine python
 
 # Verbose logging
-python -m pdf_to_doc.hf_cli template.docx folder -v
+python -m pdf_to_doc.hf_cli /path/to/template.docx /path/to/folder -v
 ```
 
 ### Options
 
 | Flag | Description |
 |------|-------------|
-| `--no-recursive` | Only process the top-level folder |
-| `--engine {auto,word,python}` | `auto` picks `word` if available |
+| `--no-recursive` | Only process the top-level folder (default is recursive) |
+| `--engine {auto,word,python}` | `auto` picks `word` if available, else `python` |
 | `--no-backup` | Do not create `.docx.bak` files before modifying |
 | `-v`, `--verbose` | Debug logging |
 
@@ -216,17 +244,26 @@ python -m pdf_to_doc.hf_cli template.docx folder -v
 ### Behavior
 
 - The template's **first section** header/footer is applied to **every section** of each target document.
-- All three variants are overwritten: primary, first-page, and even-page headers/footers — ensuring **all pages** display the template content.
-- "Link to Previous" is broken on every section so each receives its own copy.
+- All three header/footer variants are overwritten: primary, first-page, and even-page — ensuring **all pages** display the template content regardless of per-section settings in the target.
+- "Link to Previous" is broken on every section so each receives its own independent copy.
 - By default, a `.docx.bak` backup is created for each file before modification.
-- The template file is skipped if it resides inside the target folder.
+- The template file itself is skipped if it resides inside the target folder.
 - Word temp/lock files (`~$*.docx`) are automatically skipped.
 
 ---
 
 ## Tool 4: PDF Link Downloader
 
-Scrape a web page for PDF hyperlinks, create a named subfolder per link, and download each PDF.
+Scrape a web page for PDF hyperlinks, create a named subfolder per link, and download each PDF. Supports both static HTML pages and JavaScript-rendered pages (single-page apps, dynamic content).
+
+### Prerequisites (optional)
+
+For JavaScript-rendered pages, install Playwright:
+
+```bash
+pip install playwright
+python -m playwright install chromium
+```
 
 ### Usage
 
@@ -234,7 +271,7 @@ Scrape a web page for PDF hyperlinks, create a named subfolder per link, and dow
 # Download all PDFs linked on a page (uses browser rendering by default)
 python -m pdf_to_doc.dl_cli "https://example.com/downloads" /path/to/output
 
-# Overwrite existing PDFs (log history is preserved)
+# Overwrite existing PDFs (download log history is preserved)
 python -m pdf_to_doc.dl_cli "https://example.com/downloads" /path/to/output --overwrite
 
 # Use plain HTTP (faster, for simple static HTML pages without JavaScript)
@@ -249,7 +286,7 @@ python -m pdf_to_doc.dl_cli "https://example.com/downloads" /path/to/output -v
 | Flag | Description |
 |------|-------------|
 | `--overwrite` | Re-download and overwrite existing PDFs. The download log is appended to (not replaced) so history is preserved |
-| `--no-browser` | Skip browser rendering; use plain HTTP (only for static HTML pages) |
+| `--no-browser` | Skip browser rendering; use plain HTTP only. Faster, but only works for static HTML pages without JavaScript |
 | `-v`, `--verbose` | Debug logging |
 
 ### Behavior
@@ -273,11 +310,11 @@ output-folder/
 
 - **Folder name** = sanitized link text from the `<a>` tag.
 - **PDF filename** = same as the folder name (with `.pdf` extension).
-- By default, uses a headless Chromium browser (Playwright) to handle JavaScript-rendered pages (Wix, React, Angular, etc.).
+- By default, uses a headless Chromium browser (Playwright) to handle JavaScript-rendered pages (single-page apps, dynamically loaded content, etc.).
 - Use `--no-browser` for faster downloads on simple static HTML pages.
 - Skips already-downloaded files by default; use `--overwrite` to re-download.
 - Deduplicates links found on the page.
-- Invisible Unicode characters (zero-width spaces, etc.) are stripped from link text.
+- Invisible Unicode characters (zero-width spaces, etc.) are automatically stripped from link text to prevent filesystem encoding errors.
 
 ### Download Log
 
@@ -296,8 +333,8 @@ Each subfolder contains a `download_log.json` with metadata for every download. 
     "file_size_mb": 0.234,
     "content_type": "application/pdf",
     "server": "nginx",
-    "download_started_utc": "2026-04-07T14:32:01.123456+00:00",
-    "download_completed_utc": "2026-04-07T14:32:03.456789+00:00",
+    "download_started_utc": "2025-01-15T14:32:01.123456+00:00",
+    "download_completed_utc": "2025-01-15T14:32:03.456789+00:00",
     "download_duration_seconds": 2.33
   },
   {
@@ -305,13 +342,13 @@ Each subfolder contains a `download_log.json` with metadata for every download. 
     "source_page": "https://example.com/downloads",
     "download_url": "https://example.com/files/report.pdf",
     "saved_filename": "Annual Report.pdf",
-    "download_completed_utc": "2026-04-08T09:15:22.789012+00:00",
+    "download_completed_utc": "2025-01-16T09:15:22.789012+00:00",
     "..."
   }
 ]
 ```
 
-**Logged fields:** source page URL, direct download URL, original filename (from URL), saved filename, full path, folder name, file size (bytes and MB), content type, server, download start/end timestamps (UTC), and download duration.
+**Logged fields:** source page URL, direct download URL, original filename (from URL), saved filename, full local path, folder name, file size (bytes and MB), content type, server, download start/end timestamps (UTC), and download duration.
 
 ---
 
@@ -320,14 +357,14 @@ Each subfolder contains a `download_log.json` with metadata for every download. 
 Download PDFs from a web page, convert them to multiple formats, and apply a custom header/footer:
 
 ```bash
-# 1. Download PDFs
+# 1. Download PDFs from a page
 python -m pdf_to_doc.dl_cli "https://example.com/specs" /path/to/output -v
 
 # 2a. Convert all downloaded PDFs to .docx (recursive)
 python -m pdf_to_doc /path/to/output -r --engine word --overwrite -v
 
-# 2b. Convert all downloaded PDFs to .odg (LibreOffice Draw)
-python -m pdf_to_doc.lo_cli /path/to/output -r -f odg --overwrite -v
+# 2b. Convert all downloaded PDFs to .odg (LibreOffice Draw) with prefix
+python -m pdf_to_doc.lo_cli /path/to/output -r -f odg --prefix "PROJ-" --overwrite -v
 
 # 2c. Convert all downloaded PDFs to .odt (LibreOffice Writer)
 python -m pdf_to_doc.lo_cli /path/to/output -r -f odt --overwrite -v
@@ -351,10 +388,10 @@ PDF-to-DOC/
 │   ├── __main__.py
 │   ├── cli.py              # CLI for PDF-to-DOCX converter
 │   ├── converter.py         # Core PDF-to-DOCX conversion logic
+│   ├── lo_cli.py            # CLI for LibreOffice converter (ODG/ODT)
+│   ├── lo_converter.py      # Core LibreOffice conversion logic
 │   ├── hf_cli.py            # CLI for header/footer replacer
 │   ├── hf_replace.py        # Core header/footer replacement logic
-│   ├── lo_cli.py            # CLI for LibreOffice converter
-│   ├── lo_converter.py      # Core LibreOffice conversion logic
 │   ├── dl_cli.py            # CLI for PDF link downloader
 │   └── pdf_downloader.py    # Core page scraping and download logic
 ├── tests/
