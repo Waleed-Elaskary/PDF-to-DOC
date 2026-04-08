@@ -1,11 +1,12 @@
 # PDF-to-DOC Toolkit
 
-A collection of four command-line tools for working with PDF and Word documents:
+A collection of five command-line tools for working with PDF and Word documents:
 
 1. **pdf-to-doc** — Batch convert PDF files to editable `.docx` documents
 2. **pdf-to-libre** — Batch convert PDF files to `.odg` (LibreOffice Draw) or `.odt` (LibreOffice Writer)
-3. **docx-hf-replace** — Replace headers and footers across many `.docx` files using a template
-4. **pdf-download** — Scrape a web page for PDF links, create named folders, and download each file
+3. **odt-to-docx** — Batch convert `.odt` files to `.docx` via LibreOffice, with automatic removal of white background rectangles from PDF conversion artifacts
+4. **docx-hf-replace** — Replace headers and footers across many `.docx` files using a template
+5. **pdf-download** — Scrape a web page for PDF links, create named folders, and download each file
 
 All tools are cross-platform Python CLI applications. The Word COM engine (best editable `.docx` output) is available on Windows with Microsoft Word installed. LibreOffice conversions require [LibreOffice](https://www.libreoffice.org/download/) installed.
 
@@ -202,7 +203,92 @@ python -m pdf_to_doc.lo_cli /path/to/folder -v
 
 ---
 
-## Tool 3: Header & Footer Replacer
+## Tool 3: ODT to DOCX Converter
+
+Batch convert `.odt` (LibreOffice Writer) files to `.docx` using headless LibreOffice. Automatically detects and removes white background rectangles that are artifacts from PDF-to-ODT conversions — these appear as opaque white boxes in Word that hide content underneath. The removal scans **all pages**, including headers and footers.
+
+### Prerequisites
+
+Install [LibreOffice](https://www.libreoffice.org/download/).
+
+### Usage
+
+```bash
+# Convert all .odt files in a folder
+python -m pdf_to_doc.odt_cli /path/to/folder
+
+# Recursive — include subfolders
+python -m pdf_to_doc.odt_cli /path/to/folder -r
+
+# Convert specific files
+python -m pdf_to_doc.odt_cli file1.odt file2.odt
+
+# Add a prefix to output filenames
+python -m pdf_to_doc.odt_cli /path/to/folder --prefix "PROJ-"
+
+# Overwrite existing .docx files
+python -m pdf_to_doc.odt_cli /path/to/folder --overwrite
+
+# Keep white background rectangles (do not strip them)
+python -m pdf_to_doc.odt_cli /path/to/folder --keep-bg
+
+# Combine options
+python -m pdf_to_doc.odt_cli /path/to/folder -r --prefix "PROJ-" --overwrite -v
+
+# Specify LibreOffice path explicitly
+python -m pdf_to_doc.odt_cli /path/to/folder --soffice "/path/to/soffice"
+
+# Custom timeout per file
+python -m pdf_to_doc.odt_cli /path/to/folder --timeout 600
+
+# Verbose logging
+python -m pdf_to_doc.odt_cli /path/to/folder -v
+```
+
+### Options
+
+| Flag | Description |
+|------|-------------|
+| `-r`, `--recursive` | Scan subfolders for `.odt` files |
+| `--overwrite` | Overwrite existing `.docx` instead of creating `name (1).docx` |
+| `--prefix TEXT` | Prefix to prepend to output filenames (e.g. `--prefix "PROJ-"` turns `report.odt` into `PROJ-report.docx`) |
+| `--keep-bg` | Do **not** strip white background rectangles (by default they are removed) |
+| `--soffice PATH` | Explicit path to the `soffice` executable |
+| `--timeout SECONDS` | Per-file conversion timeout (default: `300`) |
+| `-v`, `--verbose` | Debug logging |
+
+### White Background Removal
+
+When PDFs are converted to `.odt` via LibreOffice, each page gets a white rectangle shape as a background layer. When the `.odt` is then converted to `.docx`, these rectangles appear as opaque white boxes in Microsoft Word that hide content behind them.
+
+This tool automatically:
+- Scans the **entire document** — body, headers, and footers across all pages and sections.
+- Detects both modern DrawingML shapes (`<wps:wsp>`) and legacy VML shapes (`<v:rect>`) with white or near-white fills.
+- Removes the shape and its container element without affecting other content.
+- Use `--keep-bg` to disable this behavior if the rectangles are intentional.
+
+### Behavior
+
+- For each `name.odt`, writes `name.docx` in the same directory.
+- With `--prefix "PROJ-"`, output becomes `PROJ-name.docx`.
+- If the output file already exists and `--overwrite` is not set, creates `name (1).docx`, `name (2).docx`, etc.
+- Source `.odt` files are never modified.
+- If a single file fails, the tool logs the error and continues with the rest.
+- Uses an isolated user profile for headless LibreOffice (works even with LibreOffice GUI open).
+- Exit codes: `0` = all succeeded, `1` = no `.odt` files found or LibreOffice not found, `2` = some files failed.
+
+### Troubleshooting
+
+| Issue | Solution |
+|-------|----------|
+| LibreOffice not found | Install LibreOffice, or pass `--soffice /path/to/soffice` |
+| Silent conversion failure | Close any open LibreOffice windows and retry |
+| White boxes still visible | Try opening the `.docx` in Word — some viewers render shapes differently. If still present, file a bug with the problematic `.odt` |
+| Timeout on large files | Increase with `--timeout 600` |
+
+---
+
+## Tool 4: Header & Footer Replacer
 
 Replace the header and footer in every `.docx` file inside a folder (recursively by default) with the header and footer from a template `.docx` file.
 
@@ -252,7 +338,7 @@ python -m pdf_to_doc.hf_cli /path/to/template.docx /path/to/folder -v
 
 ---
 
-## Tool 4: PDF Link Downloader
+## Tool 5: PDF Link Downloader
 
 Scrape a web page for PDF hyperlinks, create a named subfolder per link, and download each PDF. Supports both static HTML pages and JavaScript-rendered pages (single-page apps, dynamic content).
 
@@ -369,6 +455,9 @@ python -m pdf_to_doc.lo_cli /path/to/output -r -f odg --prefix "PROJ-" --overwri
 # 2c. Convert all downloaded PDFs to .odt (LibreOffice Writer)
 python -m pdf_to_doc.lo_cli /path/to/output -r -f odt --overwrite -v
 
+# 2d. Convert .odt files to .docx (strips white background artifacts)
+python -m pdf_to_doc.odt_cli /path/to/output -r --overwrite -v
+
 # 3. Apply custom header/footer to .docx files from a template
 python -m pdf_to_doc.hf_cli /path/to/template.docx /path/to/output -v
 ```
@@ -390,6 +479,8 @@ PDF-to-DOC/
 │   ├── converter.py         # Core PDF-to-DOCX conversion logic
 │   ├── lo_cli.py            # CLI for LibreOffice converter (ODG/ODT)
 │   ├── lo_converter.py      # Core LibreOffice conversion logic
+│   ├── odt_cli.py           # CLI for ODT-to-DOCX converter
+│   ├── odt_to_docx.py       # Core ODT-to-DOCX + white rect removal logic
 │   ├── hf_cli.py            # CLI for header/footer replacer
 │   ├── hf_replace.py        # Core header/footer replacement logic
 │   ├── dl_cli.py            # CLI for PDF link downloader

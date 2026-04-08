@@ -13,6 +13,7 @@ authors = [{ name = "PDF-to-DOC" }]
 dependencies = [
     "PyMuPDF>=1.24.0",
     "python-docx>=1.1.0",
+    "lxml>=4.9.0",
     "requests>=2.31.0",
     "beautifulsoup4>=4.12.0",
 ]
@@ -22,6 +23,7 @@ pdf-to-doc = "pdf_to_doc.cli:main"
 docx-hf-replace = "pdf_to_doc.hf_cli:main"
 pdf-download = "pdf_to_doc.dl_cli:main"
 pdf-to-libre = "pdf_to_doc.lo_cli:main"
+odt-to-docx = "pdf_to_doc.odt_cli:main"
 
 [tool.setuptools.packages.find]
 include = ["pdf_to_doc*"]
