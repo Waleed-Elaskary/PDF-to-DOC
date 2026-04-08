@@ -1,12 +1,13 @@
 # PDF-to-DOC Toolkit
 
-A collection of three command-line tools for working with PDF and Word documents:
+A collection of four command-line tools for working with PDF and Word documents:
 
 1. **pdf-to-doc** — Batch convert PDF files to editable `.docx` documents
-2. **docx-hf-replace** — Replace headers and footers across many `.docx` files using a template
-3. **pdf-download** — Scrape a web page for PDF links, create named folders, and download each file
+2. **pdf-to-libre** — Batch convert PDF files to `.odg` (LibreOffice Draw) or `.odt` (LibreOffice Writer)
+3. **docx-hf-replace** — Replace headers and footers across many `.docx` files using a template
+4. **pdf-download** — Scrape a web page for PDF links, create named folders, and download each file
 
-All tools are cross-platform Python CLI applications. The Word COM engine (best editable output) is available on Windows with Microsoft Word installed.
+All tools are cross-platform Python CLI applications. The Word COM engine (best editable output for `.docx`) is available on Windows with Microsoft Word installed. LibreOffice conversions require [LibreOffice](https://www.libreoffice.org/download/) installed.
 
 ---
 
@@ -108,7 +109,72 @@ python -m pdf_to_doc /path/to/folder -v
 
 ---
 
-## Tool 2: Header & Footer Replacer
+## Tool 2: PDF to LibreOffice Formats (ODG / ODT)
+
+Batch convert PDF files to LibreOffice Draw (`.odg`) or LibreOffice Writer (`.odt`) using headless LibreOffice. One output file is written per input PDF, saved in the same folder using the same base filename.
+
+### Prerequisites
+
+Install [LibreOffice](https://www.libreoffice.org/download/). The tool auto-detects common install locations, or you can specify the path explicitly.
+
+### Usage
+
+```bash
+# Convert all PDFs in a folder to .odg (LibreOffice Draw, default)
+python -m pdf_to_doc.lo_cli /path/to/folder
+
+# Convert to .odt (LibreOffice Writer)
+python -m pdf_to_doc.lo_cli /path/to/folder -f odt
+
+# Recursive — include subfolders
+python -m pdf_to_doc.lo_cli /path/to/folder -r
+
+# Convert specific files
+python -m pdf_to_doc.lo_cli file1.pdf file2.pdf
+
+# Overwrite existing output files
+python -m pdf_to_doc.lo_cli /path/to/folder --overwrite
+
+# Specify LibreOffice path explicitly
+python -m pdf_to_doc.lo_cli /path/to/folder --soffice "/usr/bin/soffice"
+
+# Custom timeout per file (default: 300 seconds)
+python -m pdf_to_doc.lo_cli /path/to/folder --timeout 600
+
+# Verbose logging
+python -m pdf_to_doc.lo_cli /path/to/folder -v
+```
+
+### Options
+
+| Flag | Description |
+|------|-------------|
+| `-f`, `--format {odg,odt}` | Output format: `odg` (Draw, default) or `odt` (Writer) |
+| `-r`, `--recursive` | Scan subfolders for PDFs |
+| `--overwrite` | Overwrite existing output files instead of creating `name (1).odg` |
+| `--soffice PATH` | Explicit path to the `soffice` executable |
+| `--timeout SECONDS` | Per-file conversion timeout (default: `300`) |
+| `-v`, `--verbose` | Debug logging |
+
+### Formats
+
+| Format | Extension | Application | Best For |
+|--------|-----------|-------------|----------|
+| `odg` | `.odg` | LibreOffice Draw | Drawings, diagrams, PDF pages as editable graphics |
+| `odt` | `.odt` | LibreOffice Writer | Text documents, reports, editable text content |
+
+### Behavior
+
+- For each `name.pdf`, writes `name.odg` (or `name.odt`) in the same directory.
+- If the output file already exists and `--overwrite` is not set, creates `name (1).odg`, `name (2).odg`, etc.
+- Source PDFs are never modified.
+- If a single file fails, the tool logs the error and continues with the rest.
+- LibreOffice auto-detection checks: `--soffice` flag, `SOFFICE_PATH` environment variable, system PATH, and common install directories.
+- Exit codes: `0` = all succeeded, `1` = no PDFs found or LibreOffice not found, `2` = some files failed.
+
+---
+
+## Tool 3: Header & Footer Replacer
 
 Replace the header and footer in every `.docx` file inside a folder (recursively by default) with the header and footer from a template `.docx` file.
 
@@ -158,7 +224,7 @@ python -m pdf_to_doc.hf_cli template.docx folder -v
 
 ---
 
-## Tool 3: PDF Link Downloader
+## Tool 4: PDF Link Downloader
 
 Scrape a web page for PDF hyperlinks, create a named subfolder per link, and download each PDF.
 
@@ -251,16 +317,22 @@ Each subfolder contains a `download_log.json` with metadata for every download. 
 
 ## Chaining Tools
 
-Download PDFs from a web page, convert them to editable Word documents, and apply a custom header/footer — all in three commands:
+Download PDFs from a web page, convert them to multiple formats, and apply a custom header/footer:
 
 ```bash
 # 1. Download PDFs
 python -m pdf_to_doc.dl_cli "https://example.com/specs" /path/to/output -v
 
-# 2. Convert all downloaded PDFs to .docx (recursive)
+# 2a. Convert all downloaded PDFs to .docx (recursive)
 python -m pdf_to_doc /path/to/output -r --engine word --overwrite -v
 
-# 3. Apply custom header/footer from a template
+# 2b. Convert all downloaded PDFs to .odg (LibreOffice Draw)
+python -m pdf_to_doc.lo_cli /path/to/output -r -f odg --overwrite -v
+
+# 2c. Convert all downloaded PDFs to .odt (LibreOffice Writer)
+python -m pdf_to_doc.lo_cli /path/to/output -r -f odt --overwrite -v
+
+# 3. Apply custom header/footer to .docx files from a template
 python -m pdf_to_doc.hf_cli /path/to/template.docx /path/to/output -v
 ```
 
@@ -281,6 +353,8 @@ PDF-to-DOC/
 │   ├── converter.py         # Core PDF-to-DOCX conversion logic
 │   ├── hf_cli.py            # CLI for header/footer replacer
 │   ├── hf_replace.py        # Core header/footer replacement logic
+│   ├── lo_cli.py            # CLI for LibreOffice converter
+│   ├── lo_converter.py      # Core LibreOffice conversion logic
 │   ├── dl_cli.py            # CLI for PDF link downloader
 │   └── pdf_downloader.py    # Core page scraping and download logic
 ├── tests/

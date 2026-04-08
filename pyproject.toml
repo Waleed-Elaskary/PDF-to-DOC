@@ -21,6 +21,7 @@ dependencies = [
 pdf-to-doc = "pdf_to_doc.cli:main"
 docx-hf-replace = "pdf_to_doc.hf_cli:main"
 pdf-download = "pdf_to_doc.dl_cli:main"
+pdf-to-libre = "pdf_to_doc.lo_cli:main"
 
 [tool.setuptools.packages.find]
 include = ["pdf_to_doc*"]
