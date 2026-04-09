@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "pdf-to-doc"
 version = "1.0.0"
-description = "Batch convert PDF files to Microsoft Word .docx documents."
+description = "A toolkit for batch converting and manipulating PDF, DOCX, and ODT documents."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }

@@ -187,9 +187,10 @@ python -m pdf_to_doc.odt_remove_cli <template.odt> <folder> [options]
 | `-r`, `--recursive` | Scan subfolders |
 | `--overwrite` | Overwrite existing output files |
 | `--suffix NUM` | Number appended before extension (default: `001`) |
+| `--keep-page-bg` | Do NOT remove page-size white background rectangles |
 | `-v`, `--verbose` | Debug logging |
 
-**Matching:** Images matched by SHA-256 hash; shapes matched by tag + geometry attributes.
+**Matching (fuzzy):** Text frames by case-insensitive keyword overlap; images by hash or approximate position+size; page-size white backgrounds removed by default; thin-line polygons by height.
 
 **Note:** Pure Python — no LibreOffice needed. Source files are never modified; output appends suffix (e.g. `report.odt` → `report-001.odt`). Removes from all pages including headers/footers.
 
@@ -266,6 +267,8 @@ python -m pdf_to_doc.lo_cli /path/to/output -r -f odt --overwrite -v
 python -m pdf_to_doc.odt_cli /path/to/output -r --overwrite -v
 # 5. Apply header/footer
 python -m pdf_to_doc.hf_cli /path/to/template.docx /path/to/output -v
+# 6. Export .odt to .pdf
+python -m pdf_to_doc.odt_pdf_cli /path/to/output -r --overwrite -v
 ```
 
 ---
@@ -290,12 +293,12 @@ python -m pdf_to_doc.hf_cli /path/to/template.docx /path/to/output -v
 | Package | Required By | Purpose |
 |---------|-------------|---------|
 | `PyMuPDF` | Tool 1 | PDF text extraction, OCR |
-| `python-docx` | Tools 1, 3, 4 | Read/write `.docx` files |
+| `python-docx` | Tools 1, 3, 5 | Read/write `.docx` files |
 | `pdf2docx` | Tool 1 | Layout-aware PDF-to-DOCX |
-| `lxml` | Tools 3, 7 | XML shape detection and removal |
-| `requests` | Tool 5 | HTTP downloads |
-| `beautifulsoup4` | Tool 5 | HTML parsing |
-| `playwright` | Tool 5 (optional) | JavaScript-rendered page support |
-| `pywin32` | Tools 1, 4 (Windows) | Microsoft Word COM automation |
-| LibreOffice | Tools 2, 3 | Headless document conversion |
+| `lxml` | Tools 3, 4, 7 | XML manipulation and shape detection |
+| `requests` | Tool 6 | HTTP downloads |
+| `beautifulsoup4` | Tool 6 | HTML parsing |
+| `playwright` | Tool 6 (optional) | JavaScript-rendered page support |
+| `pywin32` | Tools 1, 5 (Windows) | Microsoft Word COM automation |
+| LibreOffice | Tools 2, 3, 8 | Headless document conversion |
 | Tesseract OCR | Tool 1 (optional) | OCR for scanned PDFs |

@@ -48,7 +48,7 @@ python -m playwright install chromium
 
 Install [Tesseract OCR](https://github.com/UB-Mannheim/tesseract/wiki) and ensure it is on your PATH or in a standard install directory.
 
-**Optional — for LibreOffice conversions (.odg / .odt):**
+**Optional — for LibreOffice conversions (.odg / .odt / .docx / .pdf):**
 
 Install [LibreOffice](https://www.libreoffice.org/download/). The tool auto-detects common install locations, or you can specify the path with `--soffice`.
 
@@ -499,7 +499,7 @@ Each subfolder contains a `download_log.json` with metadata for every download. 
 
 ## Tool 7: ODT Object Remover
 
-Remove specific objects (images, shapes, lines) from `.odt` files using a "remove template". Every object found in the template is matched by content (SHA-256 image hash, shape geometry) and removed from all matching `.odt` files in a folder. Objects are removed from **all pages** including headers and footers. This is a pure-Python tool — no LibreOffice needed at runtime.
+Remove specific objects (images, shapes, lines, text boxes) from `.odt` files using a "remove template". Objects are matched using **fuzzy matching** — designed to work across files produced by independent PDF-to-ODT conversions where exact positions, sizes and text can vary slightly. Objects are removed from **all pages** including headers and footers. By default, page-size white background rectangles (common PDF-to-ODT artifacts) are also removed. This is a pure-Python tool — no LibreOffice needed at runtime.
 
 ### Usage
 
@@ -531,21 +531,26 @@ python -m pdf_to_doc.odt_remove_cli /path/to/remove-template.odt /path/to/folder
 | `-r`, `--recursive` | Scan subfolders |
 | `--overwrite` | Overwrite existing output files |
 | `--suffix NUM` | Number to append before the extension in output filenames (default: `001`) |
+| `--keep-page-bg` | Do **not** remove page-size white background rectangles (by default they are removed) |
 | `-v`, `--verbose` | Debug logging |
 
 ### How Matching Works
 
-The tool builds a set of "signatures" from the remove-template:
+The tool uses **fuzzy matching** to handle variations across independent PDF-to-ODT conversions:
 
 | Object Type | Matching Method |
 |-------------|----------------|
-| **Images** | SHA-256 hash of the actual image data inside the ODT archive |
-| **Shapes** (lines, rectangles, circles, paths, etc.) | Element tag + geometry attributes (position, size, style name) |
+| **Text frames** | Case-insensitive keyword overlap (≥50% of template keywords found in target) |
+| **Image frames** | SHA-256 hash match first, then approximate position + size fallback (±0.5 in tolerance) |
+| **Page-size rectangles** | Any polygon/rect ≈ 8.5 × 11 in is treated as a white background (removed by default, use `--keep-page-bg` to disable) |
+| **Thin-line polygons** | Polygons with height < 0.1 in matched as decorative lines |
+| **Empty text frames** | Matched by approximate size (±0.5 in tolerance) |
 
 ### Behavior
 
 - For each `name.odt`, writes `name-001.odt` in the same directory (suffix is configurable with `--suffix`).
 - Objects are removed from both `content.xml` (document body) and `styles.xml` (headers/footers) across all pages.
+- By default, page-size white background rectangles (common PDF-to-ODT artifacts) are always removed. Use `--keep-page-bg` to keep them.
 - The template file itself is skipped if it resides inside the target folder.
 - Source `.odt` files are never modified — output is always a new file.
 - If a single file fails, the tool logs the error and continues with the rest.
@@ -661,6 +666,9 @@ python -m pdf_to_doc.lo_cli /path/to/output -r -f odt --overwrite -v
 
 # 2d. Convert .odt files to .docx (strips white background artifacts)
 python -m pdf_to_doc.odt_cli /path/to/output -r --overwrite -v
+
+# 2e. Convert .odt files to .pdf
+python -m pdf_to_doc.odt_pdf_cli /path/to/output -r --overwrite -v
 
 # 3. Apply custom header/footer to .docx files from a template
 python -m pdf_to_doc.hf_cli /path/to/template.docx /path/to/output -v
