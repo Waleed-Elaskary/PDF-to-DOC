@@ -54,6 +54,13 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     p.add_argument(
+        "--keep-page-bg", action="store_true",
+        help=(
+            "Do NOT remove page-size white background rectangles. "
+            "By default these PDF-to-ODT artifacts are always removed."
+        ),
+    )
+    p.add_argument(
         "-v", "--verbose", action="store_true",
         help="Enable debug logging.",
     )
@@ -80,6 +87,7 @@ def main(argv: list[str] | None = None) -> int:
             recursive=args.recursive,
             overwrite=args.overwrite,
             suffix_num=args.suffix,
+            remove_page_bg=not args.keep_page_bg,
         )
     except Exception as exc:
         logger.error("%s", exc)

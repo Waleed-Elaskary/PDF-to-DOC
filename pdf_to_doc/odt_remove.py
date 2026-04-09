@@ -2,11 +2,20 @@
 
 Given a template .odt that contains objects (images, shapes, lines, text
 blocks), find and remove all matching objects from target .odt files in a
-folder. Matching is done by:
+folder.  Matching is *fuzzy* — designed to work across files produced by
+independent PDF-to-ODT conversions where exact positions, sizes and text
+can vary slightly.
 
-  - **Images**: SHA-256 hash of the actual image data inside the ODT archive.
-  - **Shapes/lines**: draw:style-name + geometry attributes (coordinates, size).
-  - **Text blocks**: exact text content comparison.
+Matching strategies:
+
+  - **Text frames**: case-insensitive keyword overlap between template and
+    target text-box content.
+  - **Image frames**: approximate position + approximate size (within
+    configurable tolerance).
+  - **Page-size rectangles**: any polygon/rect whose dimensions are close to
+    US-Letter (8.5 × 11 in) is treated as a white background and removed.
+  - **Thin-line polygons**: matched by approximate height (< 0.1 in).
+  - **Small decorative frames**: empty text-boxes matched by approximate size.
 
 Objects are removed from both the document body (content.xml) AND
 headers/footers (styles.xml) across ALL pages.
@@ -20,9 +29,7 @@ import re
 import shutil
 import tempfile
 import zipfile
-from copy import deepcopy
 from pathlib import Path
-from typing import Iterable
 
 from lxml import etree
 
@@ -43,54 +50,65 @@ _NS = {
 
 _DEFAULT_PATTERN = r"^.+\.odt$"
 
+_DRAW_NS = "urn:oasis:names:tc:opendocument:xmlns:drawing:1.0"
+_SVG_NS  = "urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0"
+_XLINK_NS = "http://www.w3.org/1999/xlink"
+_TEXT_NS = "urn:oasis:names:tc:opendocument:xmlns:text:1.0"
+
+# Fuzzy tolerances
+_POS_TOLERANCE_IN = 0.5     # ±0.5 inch for position matching
+_SIZE_TOLERANCE_IN = 0.5    # ±0.5 inch for size matching
+_PAGE_W = 8.5               # US Letter width
+_PAGE_H = 11.0              # US Letter height
+_PAGE_TOL = 0.15            # tolerance for page-size detection
+_THIN_THRESHOLD = 0.1       # polygons thinner than this = decorative line
+
 
 # ---------------------------------------------------------------------------
-# Fingerprinting: build "signatures" for objects in the template so we can
-# find them in targets.
+# Dimension helpers
 # ---------------------------------------------------------------------------
 
-class _ImageSig:
-    """Signature for a draw:image — based on SHA-256 of the image bytes."""
-    __slots__ = ("hash",)
-    def __init__(self, h: str):
-        self.hash = h
-    def __eq__(self, other):
-        return isinstance(other, _ImageSig) and self.hash == other.hash
-    def __hash__(self):
-        return hash(("img", self.hash))
-    def __repr__(self):
-        return f"ImageSig({self.hash[:12]}...)"
+def _to_inches(val: str | None) -> float | None:
+    """Parse an ODF dimension string to inches."""
+    if val is None:
+        return None
+    val = val.strip()
+    try:
+        if val.endswith("in"):
+            return float(val[:-2])
+        if val.endswith("cm"):
+            return float(val[:-2]) / 2.54
+        if val.endswith("mm"):
+            return float(val[:-2]) / 25.4
+        if val.endswith("pt"):
+            return float(val[:-2]) / 72.0
+        if val.endswith("pc"):
+            return float(val[:-2]) / 6.0
+        return float(val)  # assume inches
+    except ValueError:
+        return None
 
 
-class _ShapeSig:
-    """Signature for a draw:line / draw:rect / draw:custom-shape etc."""
-    __slots__ = ("tag", "attrs",)
-    def __init__(self, tag: str, attrs: frozenset):
-        self.tag = tag
-        self.attrs = attrs
-    def __eq__(self, other):
-        return isinstance(other, _ShapeSig) and self.tag == other.tag and self.attrs == other.attrs
-    def __hash__(self):
-        return hash(("shape", self.tag, self.attrs))
-    def __repr__(self):
-        return f"ShapeSig({self.tag}, {len(self.attrs)} attrs)"
+def _is_page_size(w: float | None, h: float | None) -> bool:
+    """True if dimensions ≈ US Letter (8.5 × 11 in)."""
+    if w is None or h is None:
+        return False
+    return abs(w - _PAGE_W) < _PAGE_TOL and abs(h - _PAGE_H) < _PAGE_TOL
 
 
-class _TextSig:
-    """Signature for a text block — normalised text content."""
-    __slots__ = ("text",)
-    def __init__(self, text: str):
-        self.text = text
-    def __eq__(self, other):
-        return isinstance(other, _TextSig) and self.text == other.text
-    def __hash__(self):
-        return hash(("text", self.text))
-    def __repr__(self):
-        return f"TextSig({self.text[:40]}...)"
+def _approx_eq(a: float | None, b: float | None, tol: float) -> bool:
+    """True if two values are within tolerance."""
+    if a is None or b is None:
+        return False
+    return abs(a - b) <= tol
 
 
-def _get_text_content(elem) -> str:
-    """Extract all text from an element tree, normalised."""
+# ---------------------------------------------------------------------------
+# Text helpers
+# ---------------------------------------------------------------------------
+
+def _get_text(elem) -> str:
+    """Extract all text from an element, normalised."""
     parts = []
     for node in elem.iter():
         if node.text:
@@ -100,131 +118,315 @@ def _get_text_content(elem) -> str:
     return " ".join(p for p in parts if p)
 
 
-def _geometry_attrs(elem) -> frozenset:
-    """Extract geometry-related attributes from a shape element."""
-    # Attributes that define position/size/geometry
-    keys = []
-    for attr_name in ("svg:x", "svg:y", "svg:x1", "svg:y1", "svg:x2", "svg:y2",
-                       "svg:width", "svg:height", "svg:cx", "svg:cy", "svg:r",
-                       "draw:style-name", "draw:text-style-name"):
-        ns_prefix, local = attr_name.split(":")
-        full = f'{{{_NS.get(ns_prefix, "")}}}{local}'
-        val = elem.get(full)
-        if val:
-            keys.append((attr_name, val))
-    return frozenset(keys)
+def _extract_keywords(text: str) -> set[str]:
+    """Extract meaningful keywords (lowercase, 3+ chars) from text."""
+    words = re.findall(r'[a-zA-Z0-9]+', text.lower())
+    # Skip very short words and common ones
+    skip = {"the", "and", "for", "are", "but", "not", "you", "all",
+            "can", "had", "her", "was", "one", "our", "out", "com",
+            "www", "tel", "fax", "address"}
+    return {w for w in words if len(w) >= 3 and w not in skip}
 
 
-def _collect_signatures(
-    xml_root,
-    zf: zipfile.ZipFile,
-) -> set:
-    """Collect all object signatures from an XML root (content.xml or styles.xml)."""
-    sigs: set = set()
-    xlink_href = f'{{{_NS["xlink"]}}}href'
+def _text_match(tmpl_keywords: set[str], target_text: str) -> bool:
+    """Fuzzy text match: ≥50% of template keywords found in target."""
+    if not tmpl_keywords:
+        return False
+    target_lower = target_text.lower()
+    hits = sum(1 for kw in tmpl_keywords if kw in target_lower)
+    ratio = hits / len(tmpl_keywords)
+    return ratio >= 0.5
 
-    # Images inside draw:frame > draw:image
-    for frame in xml_root.iter(f'{{{_NS["draw"]}}}frame'):
-        for img in frame.iter(f'{{{_NS["draw"]}}}image'):
-            href = img.get(xlink_href)
-            if href and href in zf.namelist():
-                h = hashlib.sha256(zf.read(href)).hexdigest()
-                sigs.add(_ImageSig(h))
-                logger.debug("Template image sig: %s -> %s", href, h[:12])
 
-    # Shapes: draw:line, draw:rect, draw:custom-shape, draw:circle, etc.
-    draw_ns = _NS["draw"]
-    shape_tags = (
-        f'{{{draw_ns}}}line',
-        f'{{{draw_ns}}}rect',
-        f'{{{draw_ns}}}circle',
-        f'{{{draw_ns}}}ellipse',
-        f'{{{draw_ns}}}polygon',
-        f'{{{draw_ns}}}polyline',
-        f'{{{draw_ns}}}path',
-        f'{{{draw_ns}}}custom-shape',
-        f'{{{draw_ns}}}connector',
-    )
-    for tag in shape_tags:
-        for shape in xml_root.iter(tag):
-            local_tag = tag.split("}")[-1]
-            attrs = _geometry_attrs(shape)
-            if attrs:
-                sigs.add(_ShapeSig(local_tag, attrs))
-                logger.debug("Template shape sig: %s %s", local_tag, dict(attrs))
+# ---------------------------------------------------------------------------
+# Template signature collection
+# ---------------------------------------------------------------------------
 
+class _FrameSig:
+    """Signature for a draw:frame in the template."""
+    __slots__ = ("x", "y", "w", "h", "has_image", "has_textbox",
+                 "text_keywords", "image_hash")
+
+    def __init__(self, *, x=None, y=None, w=None, h=None,
+                 has_image=False, has_textbox=False,
+                 text_keywords=None, image_hash=None):
+        self.x = x
+        self.y = y
+        self.w = w
+        self.h = h
+        self.has_image = has_image
+        self.has_textbox = has_textbox
+        self.text_keywords = text_keywords or set()
+        self.image_hash = image_hash
+
+    def __repr__(self):
+        kind = "img" if self.has_image else ("txt" if self.has_textbox else "empty")
+        return f"FrameSig({kind}, pos=({self.x:.2f},{self.y:.2f}), {self.w:.2f}x{self.h:.2f})"
+
+
+class _PolySig:
+    """Signature for a draw:polygon in the template."""
+    __slots__ = ("w", "h", "points", "is_page_size", "is_thin")
+
+    def __init__(self, *, w=None, h=None, points=None):
+        self.w = w
+        self.h = h
+        self.points = points
+        self.is_page_size = _is_page_size(w, h)
+        self.is_thin = h is not None and h < _THIN_THRESHOLD
+
+
+class _TemplateSigs:
+    """All signatures collected from the remove template."""
+    def __init__(self):
+        self.frames: list[_FrameSig] = []
+        self.polygons: list[_PolySig] = []
+        self.has_page_rect: bool = False
+        self.has_thin_lines: bool = False
+        # Collect all text keywords for broad text matching
+        self.all_text_keywords: set[str] = set()
+        self.text_sigs: list[set[str]] = []  # per-frame keywords
+        self.image_hashes: set[str] = set()
+
+    def __repr__(self):
+        return (f"TemplateSigs(frames={len(self.frames)}, "
+                f"polys={len(self.polygons)}, page_rect={self.has_page_rect})")
+
+
+def _collect_sigs_from_xml(xml_root, zf: zipfile.ZipFile, sigs: _TemplateSigs):
+    """Collect frame and polygon signatures from one XML file."""
+    draw_frame_tag = f'{{{_DRAW_NS}}}frame'
+    draw_image_tag = f'{{{_DRAW_NS}}}image'
+    draw_textbox_tag = f'{{{_DRAW_NS}}}text-box'
+    xlink_href = f'{{{_XLINK_NS}}}href'
+    svg_x = f'{{{_SVG_NS}}}x'
+    svg_y = f'{{{_SVG_NS}}}y'
+    svg_w = f'{{{_SVG_NS}}}width'
+    svg_h = f'{{{_SVG_NS}}}height'
+    draw_pts = f'{{{_DRAW_NS}}}points'
+
+    # Frames
+    for frame in xml_root.iter(draw_frame_tag):
+        x = _to_inches(frame.get(svg_x))
+        y = _to_inches(frame.get(svg_y))
+        w = _to_inches(frame.get(svg_w))
+        h = _to_inches(frame.get(svg_h))
+        if x is None: x = 0.0
+        if y is None: y = 0.0
+        if w is None: w = 0.0
+        if h is None: h = 0.0
+
+        fs = _FrameSig(x=x, y=y, w=w, h=h)
+
+        # Check children
+        for child in frame:
+            local = child.tag.split("}")[-1] if "}" in child.tag else child.tag
+            if local == "text-box":
+                fs.has_textbox = True
+                text = _get_text(child)
+                if text:
+                    kw = _extract_keywords(text)
+                    fs.text_keywords = kw
+                    sigs.all_text_keywords |= kw
+                    sigs.text_sigs.append(kw)
+                break
+            elif local == "image":
+                fs.has_image = True
+                href = child.get(xlink_href)
+                if href and href in zf.namelist():
+                    ih = hashlib.sha256(zf.read(href)).hexdigest()
+                    fs.image_hash = ih
+                    sigs.image_hashes.add(ih)
+                break
+
+        sigs.frames.append(fs)
+        logger.debug("Template frame: %s", fs)
+
+    # Polygons / polylines
+    for tag_name in ("polygon", "polyline"):
+        full_tag = f'{{{_DRAW_NS}}}{tag_name}'
+        for shape in xml_root.iter(full_tag):
+            w = _to_inches(shape.get(svg_w))
+            h = _to_inches(shape.get(svg_h))
+            pts = shape.get(draw_pts)
+            ps = _PolySig(w=w, h=h, points=pts)
+            sigs.polygons.append(ps)
+            if ps.is_page_size:
+                sigs.has_page_rect = True
+            if ps.is_thin:
+                sigs.has_thin_lines = True
+            logger.debug("Template polygon: w=%s h=%s page=%s thin=%s",
+                         w, h, ps.is_page_size, ps.is_thin)
+
+
+def collect_template_sigs(template_path: Path) -> _TemplateSigs:
+    """Collect all signatures from the remove template."""
+    sigs = _TemplateSigs()
+    with zipfile.ZipFile(template_path, "r") as zf:
+        for xml_name in ("content.xml", "styles.xml"):
+            if xml_name in zf.namelist():
+                root = etree.fromstring(zf.read(xml_name))
+                _collect_sigs_from_xml(root, zf, sigs)
     return sigs
 
 
-def _collect_image_hashes(zf: zipfile.ZipFile, xml_root) -> dict[str, str]:
-    """Map image href -> sha256 hash for all images referenced in the XML."""
-    hashes: dict[str, str] = {}
-    xlink_href = f'{{{_NS["xlink"]}}}href'
-    for img in xml_root.iter(f'{{{_NS["draw"]}}}image'):
-        href = img.get(xlink_href)
-        if href and href in zf.namelist():
-            hashes[href] = hashlib.sha256(zf.read(href)).hexdigest()
-    return hashes
+# ---------------------------------------------------------------------------
+# Removal logic — scan target and remove matching objects
+# ---------------------------------------------------------------------------
 
-
-def _remove_matching_objects(
+def _remove_from_xml(
     xml_root,
     target_zf: zipfile.ZipFile,
-    sigs: set,
-    tmpl_image_hashes: set[str],
+    sigs: _TemplateSigs,
+    *,
+    remove_page_bg: bool = True,
 ) -> int:
-    """Remove elements from xml_root that match any signature. Returns count."""
-    removed = 0
-    xlink_href = f'{{{_NS["xlink"]}}}href'
+    """Remove matching objects from an XML root. Returns count removed."""
+    draw_frame_tag = f'{{{_DRAW_NS}}}frame'
+    draw_image_tag = f'{{{_DRAW_NS}}}image'
+    draw_textbox_tag = f'{{{_DRAW_NS}}}text-box'
+    xlink_href = f'{{{_XLINK_NS}}}href'
+    svg_x = f'{{{_SVG_NS}}}x'
+    svg_y = f'{{{_SVG_NS}}}y'
+    svg_w = f'{{{_SVG_NS}}}width'
+    svg_h = f'{{{_SVG_NS}}}height'
+    draw_pts = f'{{{_DRAW_NS}}}points'
 
-    # Build parent map.
-    parent_map = {c: p for p in xml_root.iter() for c in p}
-
-    # Build image hash map for target.
-    target_img_hashes: dict[str, str] = {}
-    for img in xml_root.iter(f'{{{_NS["draw"]}}}image'):
-        href = img.get(xlink_href)
-        if href and href in target_zf.namelist():
-            target_img_hashes[href] = hashlib.sha256(target_zf.read(href)).hexdigest()
-
+    parent_map: dict = {c: p for p in xml_root.iter() for c in p}
     to_remove: list[tuple] = []
+    removed_ids: set[int] = set()
 
-    # Match draw:frame containing matching images.
-    for frame in xml_root.iter(f'{{{_NS["draw"]}}}frame'):
-        for img in frame.iter(f'{{{_NS["draw"]}}}image'):
-            href = img.get(xlink_href)
-            if href and href in target_img_hashes:
-                if target_img_hashes[href] in tmpl_image_hashes:
-                    # Find removable ancestor.
-                    ancestor = _find_removable(frame, parent_map)
-                    if ancestor:
-                        to_remove.append(ancestor)
-                    break
+    def _mark(elem):
+        """Walk up to find top-level draw ancestor and mark for removal."""
+        current = elem
+        best = None
+        while current is not None:
+            par = parent_map.get(current)
+            if par is None:
+                break
+            local = current.tag.split("}")[-1] if "}" in current.tag else current.tag
+            if local in ("frame", "line", "rect", "circle", "ellipse",
+                         "polygon", "polyline", "path", "custom-shape",
+                         "connector"):
+                best = (par, current)
+            current = par
+        if best:
+            to_remove.append(best)
+        elif parent_map.get(elem) is not None:
+            to_remove.append((parent_map[elem], elem))
 
-    # Match shapes.
-    draw_ns = _NS["draw"]
-    shape_tags = (
-        f'{{{draw_ns}}}line', f'{{{draw_ns}}}rect', f'{{{draw_ns}}}circle',
-        f'{{{draw_ns}}}ellipse', f'{{{draw_ns}}}polygon',
-        f'{{{draw_ns}}}polyline', f'{{{draw_ns}}}path',
-        f'{{{draw_ns}}}custom-shape', f'{{{draw_ns}}}connector',
-    )
-    for tag in shape_tags:
-        local_tag = tag.split("}")[-1]
-        for shape in xml_root.iter(tag):
-            attrs = _geometry_attrs(shape)
-            if attrs and _ShapeSig(local_tag, attrs) in sigs:
-                ancestor = _find_removable(shape, parent_map)
-                if ancestor:
-                    to_remove.append(ancestor)
+    # --- 1. Match draw:frame elements ---
+    for frame in xml_root.iter(draw_frame_tag):
+        tx = _to_inches(frame.get(svg_x)) or 0.0
+        ty = _to_inches(frame.get(svg_y)) or 0.0
+        tw = _to_inches(frame.get(svg_w)) or 0.0
+        th = _to_inches(frame.get(svg_h)) or 0.0
+        matched = False
 
-    # Deduplicate and remove.
-    seen: set[int] = set()
+        # 1a. Text-box: fuzzy keyword matching
+        for child in frame:
+            local = child.tag.split("}")[-1] if "}" in child.tag else child.tag
+            if local == "text-box":
+                text = _get_text(child)
+                if text:
+                    # Check against each template text signature
+                    for tmpl_kw in sigs.text_sigs:
+                        if _text_match(tmpl_kw, text):
+                            logger.debug("Text match: '%s'", text[:60])
+                            _mark(frame)
+                            matched = True
+                            break
+                elif not text:
+                    # Empty text-box: match by approximate position+size
+                    for fs in sigs.frames:
+                        if (fs.has_textbox and not fs.text_keywords and
+                                _approx_eq(tw, fs.w, _SIZE_TOLERANCE_IN) and
+                                _approx_eq(th, fs.h, _SIZE_TOLERANCE_IN)):
+                            logger.debug("Empty frame match at (%.2f,%.2f)", tx, ty)
+                            _mark(frame)
+                            matched = True
+                            break
+                break
+
+            elif local == "image":
+                # 1b. Image: hash match first, then position+size match
+                href = child.get(xlink_href)
+                if href and href in target_zf.namelist():
+                    img_hash = hashlib.sha256(target_zf.read(href)).hexdigest()
+                    if img_hash in sigs.image_hashes:
+                        logger.debug("Image hash match: %s", href)
+                        _mark(frame)
+                        matched = True
+                        break
+
+                # Fallback: approximate position + size match
+                for fs in sigs.frames:
+                    if fs.has_image:
+                        if (_approx_eq(tx, fs.x, _POS_TOLERANCE_IN) and
+                                _approx_eq(ty, fs.y, _POS_TOLERANCE_IN) and
+                                _approx_eq(tw, fs.w, _SIZE_TOLERANCE_IN) and
+                                _approx_eq(th, fs.h, _SIZE_TOLERANCE_IN)):
+                            logger.debug("Image pos+size match at (%.2f,%.2f) "
+                                         "%.2fx%.2f", tx, ty, tw, th)
+                            _mark(frame)
+                            matched = True
+                            break
+                break
+
+        if matched:
+            continue
+
+    # --- 2. Match polygons ---
+    for tag_name in ("polygon", "polyline"):
+        full_tag = f'{{{_DRAW_NS}}}{tag_name}'
+        for shape in xml_root.iter(full_tag):
+            w = _to_inches(shape.get(svg_w))
+            h = _to_inches(shape.get(svg_h))
+
+            # 2a. Page-size white background rectangle
+            # Always remove if remove_page_bg is on, OR if template had one
+            if _is_page_size(w, h) and (remove_page_bg or sigs.has_page_rect):
+                logger.debug("Page-size polygon: %.2fx%.2f", w or 0, h or 0)
+                _mark(shape)
+                continue
+
+            # 2b. Thin decorative lines
+            if sigs.has_thin_lines and h is not None and h < _THIN_THRESHOLD:
+                # Check if any template polygon is similarly thin
+                for ps in sigs.polygons:
+                    if ps.is_thin:
+                        logger.debug("Thin line match: h=%.4f", h)
+                        _mark(shape)
+                        break
+                continue
+
+            # 2c. Exact points match (in case same conversion)
+            pts = shape.get(draw_pts)
+            if pts:
+                for ps in sigs.polygons:
+                    if ps.points == pts:
+                        _mark(shape)
+                        break
+
+    # --- 3. Other shapes (rect, custom-shape, etc.) ---
+    other_tags = ("line", "rect", "circle", "ellipse", "path",
+                  "custom-shape", "connector")
+    for tag_name in other_tags:
+        full_tag = f'{{{_DRAW_NS}}}{tag_name}'
+        for shape in xml_root.iter(full_tag):
+            w = _to_inches(shape.get(svg_w))
+            h = _to_inches(shape.get(svg_h))
+            if _is_page_size(w, h) and (remove_page_bg or sigs.has_page_rect):
+                logger.debug("Page-size %s: %.2fx%.2f", tag_name, w or 0, h or 0)
+                _mark(shape)
+
+    # --- Deduplicate and remove ---
+    removed = 0
     for parent, child in to_remove:
         eid = id(child)
-        if eid in seen:
+        if eid in removed_ids:
             continue
-        seen.add(eid)
+        removed_ids.add(eid)
         try:
             parent.remove(child)
             removed += 1
@@ -232,27 +434,6 @@ def _remove_matching_objects(
             pass
 
     return removed
-
-
-def _find_removable(elem, parent_map) -> tuple | None:
-    """Walk up to find the best ancestor to remove (draw:frame > w:p etc.)."""
-    current = elem
-    best = None
-    while current is not None:
-        parent = parent_map.get(current)
-        if parent is None:
-            break
-        tag = current.tag.split("}")[-1] if "}" in current.tag else current.tag
-        if tag in ("frame", "line", "rect", "circle", "ellipse", "polygon",
-                    "polyline", "path", "custom-shape", "connector"):
-            best = (parent, current)
-        current = parent
-    if best:
-        return best
-    parent = parent_map.get(elem)
-    if parent is not None:
-        return (parent, elem)
-    return None
 
 
 # ---------------------------------------------------------------------------
@@ -297,6 +478,8 @@ def remove_objects_from_odt(
     template_path: Path,
     target_path: Path,
     output_path: Path,
+    *,
+    remove_page_bg: bool = True,
 ) -> int:
     """Remove template objects from target .odt, save to output_path.
 
@@ -307,24 +490,11 @@ def remove_objects_from_odt(
     output_path = Path(output_path)
 
     # 1. Collect signatures from the template.
-    with zipfile.ZipFile(template_path, "r") as zf_tmpl:
-        tmpl_content = etree.fromstring(zf_tmpl.read("content.xml"))
-        tmpl_styles = etree.fromstring(zf_tmpl.read("styles.xml"))
-        sigs = _collect_signatures(tmpl_content, zf_tmpl)
-        sigs |= _collect_signatures(tmpl_styles, zf_tmpl)
+    sigs = collect_template_sigs(template_path)
+    logger.info("Template: %s", sigs)
 
-        # Also collect raw image hashes for content-based matching.
-        tmpl_image_hashes: set[str] = set()
-        img_map_c = _collect_image_hashes(zf_tmpl, tmpl_content)
-        img_map_s = _collect_image_hashes(zf_tmpl, tmpl_styles)
-        tmpl_image_hashes = set(img_map_c.values()) | set(img_map_s.values())
-
-    logger.info(
-        "Template signatures: %d sigs, %d unique images",
-        len(sigs), len(tmpl_image_hashes),
-    )
-
-    if not sigs and not tmpl_image_hashes:
+    total_sigs = (len(sigs.frames) + len(sigs.polygons))
+    if total_sigs == 0:
         logger.warning("No removable objects found in template.")
 
     # 2. Copy target to temp, modify, save.
@@ -341,18 +511,15 @@ def remove_objects_from_odt(
         with zipfile.ZipFile(tmp_name, "r") as zf_target:
             target_content = etree.fromstring(zf_target.read("content.xml"))
             target_styles = etree.fromstring(zf_target.read("styles.xml"))
-            all_names = zf_target.namelist()
 
             # Remove from content.xml (document body — all pages).
-            r1 = _remove_matching_objects(
-                target_content, zf_target, sigs, tmpl_image_hashes,
-            )
+            r1 = _remove_from_xml(target_content, zf_target, sigs,
+                                  remove_page_bg=remove_page_bg)
             logger.debug("Removed %d objects from content.xml", r1)
 
             # Remove from styles.xml (headers/footers — all pages).
-            r2 = _remove_matching_objects(
-                target_styles, zf_target, sigs, tmpl_image_hashes,
-            )
+            r2 = _remove_from_xml(target_styles, zf_target, sigs,
+                                  remove_page_bg=remove_page_bg)
             logger.debug("Removed %d objects from styles.xml", r2)
             total_removed = r1 + r2
 
@@ -416,6 +583,7 @@ def process_folder(
     recursive: bool = False,
     overwrite: bool = False,
     suffix_num: str = "001",
+    remove_page_bg: bool = True,
 ) -> tuple[int, int, int, int]:
     """Remove template objects from all matching .odt files in a folder.
 
@@ -452,7 +620,10 @@ def process_folder(
                 continue
 
             logger.info("%s -> %s", odt_path.name, new_name)
-            removed = remove_objects_from_odt(template_path, odt_path, output_path)
+            removed = remove_objects_from_odt(
+                template_path, odt_path, output_path,
+                remove_page_bg=remove_page_bg,
+            )
             total_removed += removed
             logger.info("Wrote %s (removed %d object(s))", output_path.name, removed)
             succeeded += 1
