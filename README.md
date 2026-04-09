@@ -1,6 +1,6 @@
 # PDF-to-DOC Toolkit
 
-A collection of six command-line tools for working with PDF and Word documents:
+A collection of seven command-line tools for working with PDF and Word documents:
 
 1. **pdf-to-doc** — Batch convert PDF files to editable `.docx` documents
 2. **pdf-to-libre** — Batch convert PDF files to `.odg` (LibreOffice Draw) or `.odt` (LibreOffice Writer)
@@ -8,6 +8,7 @@ A collection of six command-line tools for working with PDF and Word documents:
 4. **odt-hf-apply** — Apply header/footer from a template `.odt` to matching `.odt` files with auto-incrementing filenames
 5. **docx-hf-replace** — Replace headers and footers across many `.docx` files using a template
 6. **pdf-download** — Scrape a web page for PDF links, create named folders, and download each file
+7. **odt-remove** — Remove specific objects (images, shapes, lines) from `.odt` files using a remove-template
 
 All tools are cross-platform Python CLI applications. The Word COM engine (best editable `.docx` output) is available on Windows with Microsoft Word installed. LibreOffice conversions require [LibreOffice](https://www.libreoffice.org/download/) installed.
 
@@ -495,6 +496,73 @@ Each subfolder contains a `download_log.json` with metadata for every download. 
 
 ---
 
+## Tool 7: ODT Object Remover
+
+Remove specific objects (images, shapes, lines) from `.odt` files using a "remove template". Every object found in the template is matched by content (SHA-256 image hash, shape geometry) and removed from all matching `.odt` files in a folder. Objects are removed from **all pages** including headers and footers. This is a pure-Python tool — no LibreOffice needed at runtime.
+
+### Usage
+
+```bash
+# Remove template objects from all .odt files in a folder
+python -m pdf_to_doc.odt_remove_cli /path/to/remove-template.odt /path/to/folder
+
+# Recursive — include subfolders
+python -m pdf_to_doc.odt_remove_cli /path/to/remove-template.odt /path/to/folder -r
+
+# Custom filename pattern (regex)
+python -m pdf_to_doc.odt_remove_cli /path/to/remove-template.odt /path/to/folder -p "^EBB-.+\.odt$"
+
+# Overwrite existing output files
+python -m pdf_to_doc.odt_remove_cli /path/to/remove-template.odt /path/to/folder --overwrite
+
+# Custom output suffix (default: 001)
+python -m pdf_to_doc.odt_remove_cli /path/to/remove-template.odt /path/to/folder --suffix 002
+
+# Verbose logging
+python -m pdf_to_doc.odt_remove_cli /path/to/remove-template.odt /path/to/folder -v
+```
+
+### Options
+
+| Flag | Description |
+|------|-------------|
+| `-p`, `--pattern REGEX` | Regex to match target filenames. Default: `^.+\.odt$` (all `.odt` files) |
+| `-r`, `--recursive` | Scan subfolders |
+| `--overwrite` | Overwrite existing output files |
+| `--suffix NUM` | Number to append before the extension in output filenames (default: `001`) |
+| `-v`, `--verbose` | Debug logging |
+
+### How Matching Works
+
+The tool builds a set of "signatures" from the remove-template:
+
+| Object Type | Matching Method |
+|-------------|----------------|
+| **Images** | SHA-256 hash of the actual image data inside the ODT archive |
+| **Shapes** (lines, rectangles, circles, paths, etc.) | Element tag + geometry attributes (position, size, style name) |
+
+### Behavior
+
+- For each `name.odt`, writes `name-001.odt` in the same directory (suffix is configurable with `--suffix`).
+- Objects are removed from both `content.xml` (document body) and `styles.xml` (headers/footers) across all pages.
+- The template file itself is skipped if it resides inside the target folder.
+- Source `.odt` files are never modified — output is always a new file.
+- If a single file fails, the tool logs the error and continues with the rest.
+- Exit codes: `0` = all succeeded, `2` = some files failed.
+
+### Examples
+
+```bash
+# Remove all objects from the template "HL-RemoveTemplate-003.odt"
+# from all .odt files in the current folder
+python -m pdf_to_doc.odt_remove_cli HL-RemoveTemplate-003.odt .
+
+# Remove from only files starting with "EBB-" recursively
+python -m pdf_to_doc.odt_remove_cli template.odt /path/to/folder -r -p "^EBB-.+\.odt$" -v
+```
+
+---
+
 ## Chaining Tools
 
 Download PDFs from a web page, convert them to multiple formats, and apply a custom header/footer:
@@ -540,6 +608,8 @@ PDF-to-DOC/
 │   ├── odt_to_docx.py       # Core ODT-to-DOCX + white rect removal logic
 │   ├── odt_hf_cli.py        # CLI for ODT header/footer applicator
 │   ├── odt_hf.py            # Core ODT header/footer replacement logic
+│   ├── odt_remove_cli.py    # CLI for ODT object remover
+│   ├── odt_remove.py        # Core ODT object removal logic
 │   ├── hf_cli.py            # CLI for header/footer replacer
 │   ├── hf_replace.py        # Core header/footer replacement logic
 │   ├── dl_cli.py            # CLI for PDF link downloader

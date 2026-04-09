@@ -173,6 +173,35 @@ python -m pdf_to_doc.dl_cli "https://example.com/downloads" /path/to/output --no
 
 ---
 
+## Tool 7: odt-remove (ODT Object Remover)
+
+```bash
+python -m pdf_to_doc.odt_remove_cli <template.odt> <folder> [options]
+```
+
+| Parameter | Description |
+|-----------|-------------|
+| `template` | Remove-template `.odt` file (objects to remove) |
+| `folder` | Folder containing target `.odt` files |
+| `-p`, `--pattern REGEX` | Filename pattern (default: `^.+\.odt$` — all `.odt` files) |
+| `-r`, `--recursive` | Scan subfolders |
+| `--overwrite` | Overwrite existing output files |
+| `--suffix NUM` | Number appended before extension (default: `001`) |
+| `-v`, `--verbose` | Debug logging |
+
+**Matching:** Images matched by SHA-256 hash; shapes matched by tag + geometry attributes.
+
+**Note:** Pure Python — no LibreOffice needed. Source files are never modified; output appends suffix (e.g. `report.odt` → `report-001.odt`). Removes from all pages including headers/footers.
+
+**Examples:**
+```bash
+python -m pdf_to_doc.odt_remove_cli template.odt /path/to/folder -r -v
+python -m pdf_to_doc.odt_remove_cli template.odt folder -p "^EBB-.+\.odt$" --overwrite
+python -m pdf_to_doc.odt_remove_cli template.odt folder --suffix 002
+```
+
+---
+
 ## Common Workflows
 
 ### Download + Convert to DOCX
@@ -233,7 +262,7 @@ python -m pdf_to_doc.hf_cli /path/to/template.docx /path/to/output -v
 | `PyMuPDF` | Tool 1 | PDF text extraction, OCR |
 | `python-docx` | Tools 1, 3, 4 | Read/write `.docx` files |
 | `pdf2docx` | Tool 1 | Layout-aware PDF-to-DOCX |
-| `lxml` | Tool 3 | XML shape detection and removal |
+| `lxml` | Tools 3, 7 | XML shape detection and removal |
 | `requests` | Tool 5 | HTTP downloads |
 | `beautifulsoup4` | Tool 5 | HTML parsing |
 | `playwright` | Tool 5 (optional) | JavaScript-rendered page support |
