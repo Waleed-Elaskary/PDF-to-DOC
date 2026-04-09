@@ -202,6 +202,36 @@ python -m pdf_to_doc.odt_remove_cli template.odt folder --suffix 002
 
 ---
 
+## Tool 8: odt-to-pdf (ODT to PDF)
+
+```bash
+python -m pdf_to_doc.odt_pdf_cli <inputs> [options]
+```
+
+| Parameter | Description |
+|-----------|-------------|
+| `inputs` | One folder OR one-or-more `.odt` file paths |
+| `-p`, `--pattern REGEX` | Filename pattern to filter (e.g. `^EBB-.+\.odt$`) |
+| `-r`, `--recursive` | Scan subfolders for `.odt` files |
+| `--overwrite` | Overwrite existing `.pdf` files |
+| `--prefix TEXT` | Prefix for output filenames (e.g. `--prefix "PROJ-"`) |
+| `--soffice PATH` | Path to `soffice` executable |
+| `--timeout SECONDS` | Per-file timeout (default: `300`) |
+| `-v`, `--verbose` | Debug logging |
+
+**Requires:** LibreOffice installed
+
+**Note:** Uses `writer_pdf_Export` filter. Source files are never modified. Lock files (`~$*.odt`) are skipped.
+
+**Examples:**
+```bash
+python -m pdf_to_doc.odt_pdf_cli /path/to/folder -r --overwrite -v
+python -m pdf_to_doc.odt_pdf_cli /path/to/folder -p "^EBB-.+\.odt$" --prefix "PROJ-"
+python -m pdf_to_doc.odt_pdf_cli file1.odt file2.odt --timeout 600
+```
+
+---
+
 ## Common Workflows
 
 ### Download + Convert to DOCX

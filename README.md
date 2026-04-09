@@ -1,6 +1,6 @@
 # PDF-to-DOC Toolkit
 
-A collection of seven command-line tools for working with PDF and Word documents:
+A collection of eight command-line tools for working with PDF and Word documents:
 
 1. **pdf-to-doc** — Batch convert PDF files to editable `.docx` documents
 2. **pdf-to-libre** — Batch convert PDF files to `.odg` (LibreOffice Draw) or `.odt` (LibreOffice Writer)
@@ -9,6 +9,7 @@ A collection of seven command-line tools for working with PDF and Word documents
 5. **docx-hf-replace** — Replace headers and footers across many `.docx` files using a template
 6. **pdf-download** — Scrape a web page for PDF links, create named folders, and download each file
 7. **odt-remove** — Remove specific objects (images, shapes, lines) from `.odt` files using a remove-template
+8. **odt-to-pdf** — Batch convert `.odt` files to `.pdf` via LibreOffice
 
 All tools are cross-platform Python CLI applications. The Word COM engine (best editable `.docx` output) is available on Windows with Microsoft Word installed. LibreOffice conversions require [LibreOffice](https://www.libreoffice.org/download/) installed.
 
@@ -563,6 +564,84 @@ python -m pdf_to_doc.odt_remove_cli template.odt /path/to/folder -r -p "^EBB-.+\
 
 ---
 
+## Tool 8: ODT to PDF Converter
+
+Batch convert `.odt` (LibreOffice Writer) files to `.pdf` using headless LibreOffice. One `.pdf` is written per input `.odt`, saved in the same folder using the same base filename. Supports filename filtering via regex patterns.
+
+### Prerequisites
+
+Install [LibreOffice](https://www.libreoffice.org/download/).
+
+### Usage
+
+```bash
+# Convert all .odt files in a folder
+python -m pdf_to_doc.odt_pdf_cli /path/to/folder
+
+# Recursive — include subfolders
+python -m pdf_to_doc.odt_pdf_cli /path/to/folder -r
+
+# Convert specific files
+python -m pdf_to_doc.odt_pdf_cli file1.odt file2.odt
+
+# Only convert files matching a pattern (e.g. starts with EBB-)
+python -m pdf_to_doc.odt_pdf_cli /path/to/folder -p "^EBB-.+\.odt$"
+
+# Add a prefix to output filenames
+python -m pdf_to_doc.odt_pdf_cli /path/to/folder --prefix "PROJ-"
+
+# Overwrite existing .pdf files
+python -m pdf_to_doc.odt_pdf_cli /path/to/folder --overwrite
+
+# Combine options
+python -m pdf_to_doc.odt_pdf_cli /path/to/folder -r -p "^EBB-.+\.odt$" --prefix "PROJ-" --overwrite -v
+
+# Specify LibreOffice path explicitly
+python -m pdf_to_doc.odt_pdf_cli /path/to/folder --soffice "/path/to/soffice"
+
+# Custom timeout per file
+python -m pdf_to_doc.odt_pdf_cli /path/to/folder --timeout 600
+
+# Verbose logging
+python -m pdf_to_doc.odt_pdf_cli /path/to/folder -v
+```
+
+### Options
+
+| Flag | Description |
+|------|-------------|
+| `-p`, `--pattern REGEX` | Regex to filter target filenames. E.g. `^EBB-.+\.odt$` to only convert files starting with `EBB-` |
+| `-r`, `--recursive` | Scan subfolders for `.odt` files |
+| `--overwrite` | Overwrite existing `.pdf` instead of creating `name (1).pdf` |
+| `--prefix TEXT` | Prefix to prepend to output filenames (e.g. `--prefix "PROJ-"` turns `report.odt` into `PROJ-report.pdf`) |
+| `--soffice PATH` | Explicit path to the `soffice` executable |
+| `--timeout SECONDS` | Per-file conversion timeout (default: `300`) |
+| `-v`, `--verbose` | Debug logging |
+
+### Behavior
+
+- For each `name.odt`, writes `name.pdf` in the same directory.
+- With `--prefix "PROJ-"`, output becomes `PROJ-name.pdf`.
+- If the output file already exists and `--overwrite` is not set, creates `name (1).pdf`, `name (2).pdf`, etc.
+- Source `.odt` files are never modified.
+- Lock/temp files (`~$*.odt`) are automatically skipped.
+- If a single file fails, the tool logs the error and continues with the rest.
+- Uses an isolated user profile for headless LibreOffice (works even with LibreOffice GUI open).
+- Uses the `writer_pdf_Export` filter for high-quality PDF output.
+- LibreOffice auto-detection order: `--soffice` flag > `SOFFICE_PATH` environment variable > system PATH > common install directories.
+- Exit codes: `0` = all succeeded, `1` = no `.odt` files found or LibreOffice not found, `2` = some files failed.
+
+### Troubleshooting
+
+| Issue | Solution |
+|-------|----------|
+| LibreOffice not found | Install LibreOffice, or pass `--soffice /path/to/soffice` |
+| Silent conversion failure | Close any open LibreOffice windows and retry |
+| Timeout on large files | Increase with `--timeout 600` (or higher) |
+| Permission errors | Ensure write access to the `.odt`'s parent directory |
+
+---
+
 ## Chaining Tools
 
 Download PDFs from a web page, convert them to multiple formats, and apply a custom header/footer:
@@ -610,6 +689,8 @@ PDF-to-DOC/
 │   ├── odt_hf.py            # Core ODT header/footer replacement logic
 │   ├── odt_remove_cli.py    # CLI for ODT object remover
 │   ├── odt_remove.py        # Core ODT object removal logic
+│   ├── odt_pdf_cli.py       # CLI for ODT-to-PDF converter
+│   ├── odt_to_pdf.py        # Core ODT-to-PDF conversion logic
 │   ├── hf_cli.py            # CLI for header/footer replacer
 │   ├── hf_replace.py        # Core header/footer replacement logic
 │   ├── dl_cli.py            # CLI for PDF link downloader
