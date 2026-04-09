@@ -1,12 +1,13 @@
 # PDF-to-DOC Toolkit
 
-A collection of five command-line tools for working with PDF and Word documents:
+A collection of six command-line tools for working with PDF and Word documents:
 
 1. **pdf-to-doc** — Batch convert PDF files to editable `.docx` documents
 2. **pdf-to-libre** — Batch convert PDF files to `.odg` (LibreOffice Draw) or `.odt` (LibreOffice Writer)
 3. **odt-to-docx** — Batch convert `.odt` files to `.docx` via LibreOffice, with automatic removal of white background rectangles from PDF conversion artifacts
-4. **docx-hf-replace** — Replace headers and footers across many `.docx` files using a template
-5. **pdf-download** — Scrape a web page for PDF links, create named folders, and download each file
+4. **odt-hf-apply** — Apply header/footer from a template `.odt` to matching `.odt` files with auto-incrementing filenames
+5. **docx-hf-replace** — Replace headers and footers across many `.docx` files using a template
+6. **pdf-download** — Scrape a web page for PDF links, create named folders, and download each file
 
 All tools are cross-platform Python CLI applications. The Word COM engine (best editable `.docx` output) is available on Windows with Microsoft Word installed. LibreOffice conversions require [LibreOffice](https://www.libreoffice.org/download/) installed.
 
@@ -288,7 +289,63 @@ This tool automatically:
 
 ---
 
-## Tool 4: Header & Footer Replacer
+## Tool 4: ODT Header & Footer Applicator
+
+Apply header and footer from a template `.odt` file to all `.odt` files in a folder that match a filename pattern. The output file has the trailing number in the filename incremented (e.g. `-001.odt` becomes `-002.odt`). This is a pure-Python tool — no LibreOffice needed at runtime.
+
+### Usage
+
+```bash
+# Apply header/footer to all files matching default pattern (*-NNN.odt)
+python -m pdf_to_doc.odt_hf_cli /path/to/template.odt /path/to/folder
+
+# Recursive
+python -m pdf_to_doc.odt_hf_cli /path/to/template.odt /path/to/folder -r
+
+# Custom filename pattern (regex with one capture group for the number)
+python -m pdf_to_doc.odt_hf_cli /path/to/template.odt /path/to/folder -p "^EBB-.+-(\d+)\.odt$"
+
+# Overwrite existing output files
+python -m pdf_to_doc.odt_hf_cli /path/to/template.odt /path/to/folder --overwrite
+
+# Custom increment (e.g. +2 instead of +1)
+python -m pdf_to_doc.odt_hf_cli /path/to/template.odt /path/to/folder --increment 2
+
+# Verbose logging
+python -m pdf_to_doc.odt_hf_cli /path/to/template.odt /path/to/folder -v
+```
+
+### Options
+
+| Flag | Description |
+|------|-------------|
+| `-p`, `--pattern REGEX` | Regex to match filenames. Must have one capture group for the trailing number. Default: `^.+-(\d+)\.odt$` |
+| `-r`, `--recursive` | Scan subfolders |
+| `--overwrite` | Overwrite existing output files |
+| `--increment N` | Number to add to trailing digit (default: `1`) |
+| `-v`, `--verbose` | Debug logging |
+
+### Pattern Examples
+
+| Pattern | Matches | Output |
+|---------|---------|--------|
+| `^.+-(\d+)\.odt$` (default) | `EBB-Report-001.odt` | `EBB-Report-002.odt` |
+| `^EBB-.+-(\d+)\.odt$` | Only files starting with `EBB-` | `EBB-Name-002.odt` |
+| `^.*_v(\d+)\.odt$` | `Document_v3.odt` | `Document_v4.odt` |
+| `^Report-(\d+)\.odt$` | `Report-05.odt` | `Report-06.odt` |
+
+### Behavior
+
+- Copies all header/footer variants (primary, left-page, first-page) from the template's first master-page into every master-page of each target.
+- Copies images referenced by the header/footer from the template into the output file.
+- Copies automatic styles used by the header/footer content.
+- The trailing number is zero-padded to the same width as the original (e.g. `001` → `002`, not `2`).
+- The template file itself is skipped if it resides inside the target folder.
+- Source `.odt` files are never modified — output is always a new file.
+
+---
+
+## Tool 5: Header & Footer Replacer
 
 Replace the header and footer in every `.docx` file inside a folder (recursively by default) with the header and footer from a template `.docx` file.
 
@@ -338,7 +395,7 @@ python -m pdf_to_doc.hf_cli /path/to/template.docx /path/to/folder -v
 
 ---
 
-## Tool 5: PDF Link Downloader
+## Tool 6: PDF Link Downloader
 
 Scrape a web page for PDF hyperlinks, create a named subfolder per link, and download each PDF. Supports both static HTML pages and JavaScript-rendered pages (single-page apps, dynamic content).
 
@@ -481,6 +538,8 @@ PDF-to-DOC/
 │   ├── lo_converter.py      # Core LibreOffice conversion logic
 │   ├── odt_cli.py           # CLI for ODT-to-DOCX converter
 │   ├── odt_to_docx.py       # Core ODT-to-DOCX + white rect removal logic
+│   ├── odt_hf_cli.py        # CLI for ODT header/footer applicator
+│   ├── odt_hf.py            # Core ODT header/footer replacement logic
 │   ├── hf_cli.py            # CLI for header/footer replacer
 │   ├── hf_replace.py        # Core header/footer replacement logic
 │   ├── dl_cli.py            # CLI for PDF link downloader

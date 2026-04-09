@@ -24,6 +24,7 @@ docx-hf-replace = "pdf_to_doc.hf_cli:main"
 pdf-download = "pdf_to_doc.dl_cli:main"
 pdf-to-libre = "pdf_to_doc.lo_cli:main"
 odt-to-docx = "pdf_to_doc.odt_cli:main"
+odt-hf-apply = "pdf_to_doc.odt_hf_cli:main"
 
 [tool.setuptools.packages.find]
 include = ["pdf_to_doc*"]
