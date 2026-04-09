@@ -12,3 +12,8 @@ venv/
 downloads/
 *.log
 .pytest_cache/
+
+# Local working data (private)
+.claude/
+PDFs/
+Specials/
