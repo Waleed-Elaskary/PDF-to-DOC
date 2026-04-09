@@ -314,23 +314,87 @@ def apply_hf_to_odt(
             target_styles, xml_declaration=True, encoding="UTF-8",
         )
 
-        # Rebuild the ODT with modified styles.xml and template images.
+        # Rebuild the ODT properly:
+        #   - "mimetype" must be FIRST entry and STORED (no compression)
+        #   - All other entries use ZIP_DEFLATED
+        #   - manifest.xml must list any new image files
         final_tmp = tmp_name + ".new"
+        added_images: list[str] = []
+
         with zipfile.ZipFile(tmp_name, "r") as zf_in, \
-             zipfile.ZipFile(final_tmp, "w", zipfile.ZIP_DEFLATED) as zf_out:
+             zipfile.ZipFile(final_tmp, "w") as zf_out:
 
+            # 1. Write mimetype first, uncompressed (ODT spec requirement).
+            if "mimetype" in zf_in.namelist():
+                zf_out.writestr(
+                    zipfile.ZipInfo("mimetype"),
+                    zf_in.read("mimetype"),
+                    compress_type=zipfile.ZIP_STORED,
+                )
+
+            # 2. Write all other entries (replacing styles.xml).
             for item in zf_in.namelist():
+                if item == "mimetype":
+                    continue  # Already written.
                 if item == "styles.xml":
-                    zf_out.writestr("styles.xml", new_styles_data)
+                    zf_out.writestr(
+                        zipfile.ZipInfo("styles.xml"),
+                        new_styles_data,
+                        compress_type=zipfile.ZIP_DEFLATED,
+                    )
+                elif item == "META-INF/manifest.xml":
+                    continue  # Rewritten below after adding images.
                 else:
-                    zf_out.writestr(item, zf_in.read(item))
+                    # Preserve the original entry's compression settings.
+                    info = zf_in.getinfo(item)
+                    zf_out.writestr(info, zf_in.read(item))
 
-            # Copy images from template that are referenced by header/footer.
+            # 3. Copy images from template that are referenced by hf.
             if image_refs:
                 with zipfile.ZipFile(template_path, "r") as zf_tmpl:
                     for ref in image_refs:
                         if ref in zf_tmpl.namelist() and ref not in all_names:
-                            zf_out.writestr(ref, zf_tmpl.read(ref))
+                            zf_out.writestr(
+                                zipfile.ZipInfo(ref),
+                                zf_tmpl.read(ref),
+                                compress_type=zipfile.ZIP_DEFLATED,
+                            )
+                            added_images.append(ref)
+                            logger.debug("Copied image: %s", ref)
+
+            # 4. Update and write manifest.xml with new image entries.
+            manifest_data = zf_in.read("META-INF/manifest.xml")
+            manifest_root = etree.fromstring(manifest_data)
+            manifest_ns = "urn:oasis:names:tc:opendocument:xmlns:manifest:1.0"
+            for img_path in added_images:
+                # Determine media type from extension.
+                ext = img_path.rsplit(".", 1)[-1].lower() if "." in img_path else ""
+                media_types = {
+                    "png": "image/png",
+                    "jpg": "image/jpeg",
+                    "jpeg": "image/jpeg",
+                    "gif": "image/gif",
+                    "svg": "image/svg+xml",
+                    "bmp": "image/bmp",
+                    "tiff": "image/tiff",
+                    "tif": "image/tiff",
+                }
+                media_type = media_types.get(ext, "application/octet-stream")
+                entry = etree.SubElement(
+                    manifest_root,
+                    f'{{{manifest_ns}}}file-entry',
+                )
+                entry.set(f'{{{manifest_ns}}}full-path', img_path)
+                entry.set(f'{{{manifest_ns}}}media-type', media_type)
+
+            new_manifest = etree.tostring(
+                manifest_root, xml_declaration=True, encoding="UTF-8",
+            )
+            zf_out.writestr(
+                zipfile.ZipInfo("META-INF/manifest.xml"),
+                new_manifest,
+                compress_type=zipfile.ZIP_DEFLATED,
+            )
 
         os.replace(final_tmp, tmp_name)
         shutil.move(tmp_name, str(output_path))
