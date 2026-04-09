@@ -175,7 +175,23 @@ def apply_hf_to_odt(
     if not tmpl_master_pages:
         raise ValueError(f"No master pages found in template: {template_path}")
 
-    tmpl_mp = tmpl_master_pages[0]
+    # Find the first master-page that actually HAS header or footer content.
+    # Some templates have an empty "Standard" page followed by the real one.
+    tmpl_mp = None
+    for candidate in tmpl_master_pages:
+        hf = _get_hf_elements(candidate)
+        if any(v is not None for v in hf.values()):
+            tmpl_mp = candidate
+            break
+    if tmpl_mp is None:
+        # Fall back to first if none have header/footer
+        tmpl_mp = tmpl_master_pages[0]
+        logger.warning("No master-page with header/footer found in template.")
+    else:
+        logger.info(
+            "Using template master-page '%s' for header/footer.",
+            tmpl_mp.get(f'{{{_NS["style"]}}}name', 'unknown'),
+        )
     tmpl_hf = _get_hf_elements(tmpl_mp)
 
     # Collect image references from header/footer
@@ -232,46 +248,66 @@ def apply_hf_to_odt(
         }
 
         for mp in target_master_pages:
-            for key, tag in hf_tags.items():
-                # Remove existing
-                for old in mp.findall(tag.split("}")[-1], _NS):
-                    mp.remove(old)
-                existing = mp.findall(
-                    f'{{{_NS["style"]}}}{key.replace("-", "-")}',
-                )
-                # Direct tag search
+            mp_name = mp.get(f'{{{_NS["style"]}}}name', 'unknown')
+            logger.debug("Processing target master-page: %s", mp_name)
+
+            for key, full_tag in hf_tags.items():
+                # Remove ALL existing children with this tag
                 for child in list(mp):
-                    child_local = child.tag.split("}")[-1] if "}" in child.tag else child.tag
-                    if child_local == key:
+                    if child.tag == full_tag:
                         mp.remove(child)
+                        logger.debug("  Removed existing <%s>", key)
 
                 # Insert from template
                 tmpl_elem = tmpl_hf.get(key)
                 if tmpl_elem is not None:
                     mp.append(deepcopy(tmpl_elem))
+                    logger.debug("  Inserted <%s> from template", key)
 
-        # Also copy automatic styles used by header/footer from template
+        # Collect ALL style names referenced by template header/footer.
+        needed_styles: set[str] = set()
+        for elem in tmpl_hf.values():
+            if elem is not None:
+                needed_styles |= _collect_referenced_styles(elem)
+        logger.debug("Styles referenced by template hf: %s", needed_styles)
+
+        # Copy automatic styles from template's styles.xml
         tmpl_auto = tmpl_styles.find("office:automatic-styles", _NS)
         target_auto = target_styles.find("office:automatic-styles", _NS)
-        if tmpl_auto is not None and target_auto is not None:
-            # Collect style names referenced by template hf
-            needed_styles: set[str] = set()
-            for elem in tmpl_hf.values():
-                if elem is not None:
-                    needed_styles |= _collect_referenced_styles(elem)
+        if target_auto is None:
+            target_auto = etree.SubElement(
+                target_styles,
+                f'{{{_NS["office"]}}}automatic-styles',
+            )
 
-            # Existing style names in target
+        if tmpl_auto is not None:
             existing_names: set[str] = set()
             for s in target_auto:
                 n = s.get(f'{{{_NS["style"]}}}name')
                 if n:
                     existing_names.add(n)
 
-            # Copy needed styles that don't exist in target
             for s in tmpl_auto:
                 n = s.get(f'{{{_NS["style"]}}}name')
-                if n and n in needed_styles and n not in existing_names:
+                if n and n not in existing_names:
                     target_auto.append(deepcopy(s))
+                    logger.debug("Copied automatic style: %s", n)
+
+        # Copy named styles from office:styles that are referenced
+        tmpl_office_styles = tmpl_styles.find("office:styles", _NS)
+        target_office_styles = target_styles.find("office:styles", _NS)
+        if tmpl_office_styles is not None and target_office_styles is not None:
+            existing_office: set[str] = set()
+            for s in target_office_styles:
+                n = s.get(f'{{{_NS["style"]}}}name')
+                if n:
+                    existing_office.add(n)
+
+            for s in tmpl_office_styles:
+                n = s.get(f'{{{_NS["style"]}}}name')
+                if n and n in needed_styles and n not in existing_office:
+                    target_office_styles.append(deepcopy(s))
+                    logger.debug("Copied office style: %s", n)
 
         # Serialize modified styles.xml
         new_styles_data = etree.tostring(
